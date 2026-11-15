@@ -1494,7 +1494,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v53 · 15/11/2026";
+const VERSAO = "v54 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -9178,7 +9178,7 @@ function htmlEquipe(){
         <div class="av">${u.nome.split(" ").map(x=>x[0]).slice(0,2).join("")}</div>
         <div class="main"><b>${u.nome}</b>
           <small>${rot}${u.cro?" · "+u.cro:""}</small>
-          <small>${cfg.emails[u.id]||"e-mail não disponível"}${u.telefone?" · "+u.telefone:""}</small>
+          <small>${u.email||cfg.emails[u.id]||"e-mail não disponível"}${u.telefone?" · "+u.telefone:""}</small>
           ${falta.length?`<small style="color:var(--warn)">cadastro incompleto: ${falta.join(", ")}</small>`:""}
         </div>
         <div class="end"><button class="btn primary" data-aprovar="${u.id}">Aprovar</button></div>
@@ -9196,9 +9196,14 @@ function htmlEquipe(){
       <div class="av" style="${u.cor?`background:${u.cor};color:#fff`:""}">${u.nome.split(" ").map(x=>x[0]).slice(0,2).join("")}</div>
       <div class="main"><b>${u.nome}${eu?" <span class='pill neutral'>você</span>":""}</b>
         <small>${rot}${u.especialidade?" · "+u.especialidade:""}${u.cro?" · "+u.cro:""}</small>
-        <small>${cfg.emails[u.id]||"e-mail não disponível"}${u.telefone?" · "+u.telefone:""}</small></div>
+        <small>${u.email||cfg.emails[u.id]||"e-mail não disponível"}${u.telefone?" · "+u.telefone:""}</small></div>
       <div class="end">
-        <span class="pill ${u.ativo?"ok":"neutral"}">${u.ativo?"ativo":"inativo"}</span>
+        <!-- Mostrava o campo booleano, que é outra coisa: um cadastro
+             pendente vem com ele verdadeiro e aparecia como ativo na
+             lista, enquanto a pessoa não conseguia entrar. Agora a
+             etiqueta diz o estado de aprovação. -->
+        <span class="pill ${u.status==="pendente"?"warn":(u.ativo&&u.status!=="inativo")?"ok":"neutral"}"
+          >${u.status==="pendente"?"pendente":(u.ativo&&u.status!=="inativo")?"ativo":"inativo"}</span>
         <button class="minibtn" data-eq="${u.id}">editar</button>
       </div></div>`;
   }).join("") || '<div class="empty">Nenhuma pessoa cadastrada.</div>';
@@ -9420,6 +9425,19 @@ async function salvarProcedimento(nome, opc){
   if(ok) toast("Procedimento salvo.");
 }
 
+/* Depois de redesenhar o painel, rola até o campo novo e põe o cursor
+   nele. Sem isto, abrir um formulário que nasce fora da área visível é
+   indistinguível de o botão não funcionar. */
+function levarAoFormulario(sel){
+  setTimeout(()=>{
+    const el = document.querySelector(sel);
+    if(!el) return;
+    const cartao = el.closest(".card") || el;
+    cartao.scrollIntoView({behavior:"smooth", block:"center"});
+    try{ el.focus({preventScroll:true}); }catch(e){ el.focus(); }
+  }, 60);
+}
+
 function ligarConfig(){
   ligarProcedimentos();
   // unidade
@@ -9447,8 +9465,10 @@ function ligarConfig(){
 
   // salas
   const ns = $("#novaSala");
-  if(ns) ns.addEventListener("click", ()=>{ salaEdit={nome:"",tipo:"clinica",ativa:true}; renderConfig(); });
+  if(ns) ns.addEventListener("click", ()=>{
+    salaEdit={nome:"",tipo:"clinica",ativa:true}; renderConfig(); levarAoFormulario("#sNome"); });
   $$("#cfgCorpo button[data-sala]").forEach(b=>b.addEventListener("click", ()=>{
+    setTimeout(()=>levarAoFormulario("#sNome"), 0);
     salaEdit = {...cfg.salas.find(s=>s.id===b.dataset.sala)}; renderConfig();
   }));
   const sc = $("#sCancelar");
@@ -9490,11 +9510,20 @@ function ligarConfig(){
   }));
 
   const na = $("#novoAcesso");
-  if(na) na.addEventListener("click", ()=>{ convidando=true; equipeEdit=null; renderConfig(); });
+  if(na) na.addEventListener("click", ()=>{
+    convidando=true; equipeEdit=null; renderConfig(); levarAoFormulario("#nvNome"); });
   const nc = $("#nvCancelar");
   if(nc) nc.addEventListener("click", ()=>{ convidando=false; renderConfig(); });
   $$("#cfgCorpo button[data-eq]").forEach(b=>b.addEventListener("click", ()=>{
-    equipeEdit = {...cfg.equipe.find(u=>u.id===b.dataset.eq)}; convidando=false; renderConfig();
+    /* find pode não achar — e o spread de undefined dá {} silencioso,
+       que depois quebra em u.nome e deixa a tela sem reagir. */
+    const alvo = cfg.equipe.find(u=>u.id===b.dataset.eq);
+    if(!alvo){ toast("Não encontrei esse cadastro. Recarregue a página."); return; }
+    equipeEdit = {...alvo}; convidando=false; renderConfig();
+    /* O formulário nasce no TOPO do painel. Quem clicou estava lá
+       embaixo, na lista, e não via nada acontecer — parecia botão
+       morto. Levar a tela até ele. */
+    levarAoFormulario("#eqNome");
   }));
   const ec = $("#eqCancelar");
   if(ec) ec.addEventListener("click", ()=>{ equipeEdit=null; renderConfig(); });
@@ -12467,7 +12496,7 @@ window.MD = {
   pintarClinica, ligarRodape, pintarRodape,
   /* a tela de equipe fica acessível ao teste: aprovação é controle de
      acesso, e conferir só pelo olho é como não conferir */
-  htmlEquipe, cfg(){ return cfg; }, CFG,
+  htmlEquipe, cfg(){ return cfg; }, CFG, renderConfig, abrirConfig,
   get usuario(){ return usuario; },
   get modo(){ return MODO; },
   projetar, taxaPara, resumoPaciente, fluxoPorMes, abrirPaciente, numBR, hojeISO, cent,
