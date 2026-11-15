@@ -1488,7 +1488,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v49 · 15/11/2026";
+const VERSAO = "v50 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -10506,6 +10506,7 @@ function entrarNoApp(){
   $("#loginScreen").hidden=true; $("#appRoot").hidden=false;
   aplicarPermissoes(); renderAll(); renderAgente();
   pintarClinica(); ligarRodape();
+  exigirCadastroSeFaltar();
   // a mini agenda da lateral precisa dos compromissos de hoje já no
   // primeiro segundo; sem isso o atalho abre vazio e parece quebrado
   carregarAgenda();
@@ -12452,6 +12453,7 @@ const REGRAS_SENHA = [
   ["esp", s => /[^A-Za-zÀ-ÿ0-9]/.test(s)],
 ];
 let tokenSenha = null;
+let modoSenha = "invite";   // invite | recovery | completar
 
 /* As mesmas regras valem no banco (0025). Aqui existem para avisar
    enquanto se digita; lá existem para valer. Validar só na tela é
@@ -12517,11 +12519,17 @@ function pintarRegrasSenha(){
     if(li) li.classList.toggle("ok", f(v));
   });
   const v2 = $("#inSenha2").value;
-  const e = primeiroErroCadastro();
+  const pedeCadastro = (modoSenha !== "recovery");
+  const e = pedeCadastro ? primeiroErroCadastro() : "";
   const cx = $("#cadErro");
   if(cx) cx.innerHTML = (e && ($("#cadNome").value || $("#cadCpf").value || $("#cadCel").value))
     ? '<div class="aviso">'+e+'</div>' : "";
-  $("#senhaBtn").disabled = !(senhaValida(v) && v === v2 && cadastroCompleto());
+  const okCad = !pedeCadastro || cadastroCompleto();
+  if(modoSenha === "completar"){           // só dados, sem senha
+    $("#senhaBtn").disabled = !cadastroCompleto();
+    return;
+  }
+  $("#senhaBtn").disabled = !(senhaValida(v) && v === v2 && okCad);
 }
 
 /* o e-mail sai do próprio token, só para a pessoa confirmar que está
@@ -12535,14 +12543,61 @@ function emailDoToken(tok){
 
 function abrirDefinicaoDeSenha(tok, tipo){
   tokenSenha = tok;
+  modoSenha = tipo;
+  /* Quem chega por RECUPERAÇÃO já é da casa: só troca a senha. Pedir
+     CPF, nascimento e celular de novo é burocracia sem função — e foi
+     o que gerou o erro "cadastro já concluído", porque a conta dessa
+     pessoa não está mais pendente. O cadastro só aparece em convite. */
+  const pedeCadastro = (tipo !== "recovery");
+  const bloco = $("#dadosCadastro");
+  if(bloco) bloco.hidden = !pedeCadastro;
   const em = emailDoToken(tok);
   $("#senhaTitulo").textContent = tipo === "recovery" ? "Redefinir sua senha" : "Criar sua senha";
+  $("#senhaBtn").textContent = tipo === "recovery" ? "Salvar nova senha" : "Concluir cadastro";
   $("#senhaSub").innerHTML = tipo === "recovery"
     ? "Escolha uma senha nova para <b>" + (em || "sua conta") + "</b>."
     : "Escolha a senha de acesso de <b>" + (em || "sua conta") + "</b>.";
   $("#senhaModal").hidden = false;
   pintarRegrasSenha();
   setTimeout(()=>$("#inSenha1").focus(), 50);
+}
+
+/* Conta que já existe e está sem os dados obrigatórios — o caso de quem
+   foi criado antes desta regra existir. Em vez de inventar outro link de
+   convite, o próprio sistema pede ao entrar. Enquanto não preencher, a
+   janela não fecha: dado obrigatório que dá para adiar não é obrigatório. */
+async function exigirCadastroSeFaltar(){
+  if(MODO !== "nuvem" || !DB.tok) return false;
+  let eu;
+  try{
+    eu = await DB.rest("GET","usuarios?select=nome,cpf,nascimento,sexo,celular&id=eq."+DB.meuId);
+  }catch(e){ return false; }
+  const u = eu && eu[0];
+  if(!u) return false;
+  if(u.cpf && u.nascimento && u.sexo && u.celular) return false;
+
+  modoSenha = "completar";
+  tokenSenha = DB.tok;
+  $("#senhaTitulo").textContent = "Complete seu cadastro";
+  $("#senhaSub").innerHTML = "Faltam dados obrigatórios no seu acesso. " +
+    "Preencha para continuar usando o sistema.";
+  /* nesta via a senha não entra: a pessoa já está dentro */
+  ["inSenha1","inSenha2"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el && el.closest(".field")) el.closest(".field").hidden = true;
+  });
+  const reg = $("#regrasSenha"); if(reg) reg.hidden = true;
+  const bloco = $("#dadosCadastro"); if(bloco) bloco.hidden = false;
+  if(u.nome) $("#cadNome").value = u.nome;
+  if(u.cpf) $("#cadCpf").value = fmtCpf(u.cpf);
+  if(u.nascimento) $("#cadNasc").value = u.nascimento;
+  if(u.sexo) $("#cadSexo").value = u.sexo;
+  if(u.celular) $("#cadCel").value = fmtCel(u.celular);
+  $("#senhaBtn").textContent = "Salvar meus dados";
+  $("#senhaModal").hidden = false;
+  pintarRegrasSenha();
+  setTimeout(()=>$("#cadNome").focus(), 60);
+  return true;
 }
 
 function lerConviteDaURL(){
@@ -12569,11 +12624,15 @@ function lerConviteDaURL(){
 async function salvarNovaSenha(){
   const v = $("#inSenha1").value, v2 = $("#inSenha2").value;
   const msg = $("#senhaMsg");
-  if(!senhaValida(v)){ msg.innerHTML = '<div class="aviso">A senha ainda não atende às regras acima.</div>'; return; }
-  if(v !== v2){ msg.innerHTML = '<div class="aviso">As duas senhas não são iguais.</div>'; return; }
+  if(modoSenha !== "completar"){
+    if(!senhaValida(v)){ msg.innerHTML = '<div class="aviso">A senha ainda não atende às regras acima.</div>'; return; }
+    if(v !== v2){ msg.innerHTML = '<div class="aviso">As duas senhas não são iguais.</div>'; return; }
+  }
   const b = $("#senhaBtn"); b.disabled = true; b.textContent = "Salvando…";
   try{
-    const r = await fetch(BACKEND.url + "/auth/v1/user", {
+    const r = (modoSenha === "completar")
+      ? {ok:true, text: async()=>"{}"}        // já está logado; não há senha a trocar
+      : await fetch(BACKEND.url + "/auth/v1/user", {
       method:"PUT",
       headers:{apikey:BACKEND.key, Authorization:"Bearer "+tokenSenha,
                "Content-Type":"application/json"},
@@ -12593,6 +12652,7 @@ async function salvarNovaSenha(){
        que escreve só os campos da própria pessoa e nunca perfil ou
        estado de aprovação */
     try{
+      if(modoSenha === "recovery") throw "pular";
       const rc = await fetch(BACKEND.url + "/rest/v1/rpc/completar_cadastro", {
         method:"POST",
         headers:{apikey:BACKEND.key, Authorization:"Bearer "+tokenSenha,
@@ -12614,10 +12674,18 @@ async function salvarNovaSenha(){
         b.disabled = false; b.textContent = "Concluir cadastro"; return;
       }
     }catch(e){
-      msg.innerHTML = '<div class="aviso">A senha foi salva, mas o cadastro falhou por rede. Tente de novo.</div>';
-      b.disabled = false; b.textContent = "Concluir cadastro"; return;
+      if(e !== "pular"){
+        msg.innerHTML = '<div class="aviso">A senha foi salva, mas o cadastro falhou por rede. Tente de novo.</div>';
+        b.disabled = false; b.textContent = "Concluir cadastro"; return;
+      }
     }
 
+    if(modoSenha === "completar"){
+      tokenSenha = null; modoSenha = "invite";
+      $("#senhaModal").hidden = true;
+      toast("Cadastro completo. Obrigado.");
+      return;
+    }
     const em = emailDoToken(tokenSenha);
     tokenSenha = null;
     $("#inSenha1").value = ""; $("#inSenha2").value = "";
@@ -12625,9 +12693,11 @@ async function salvarNovaSenha(){
     if(em) $("#inUser").value = em;
     const m = $("#modoHint");
     if(m){ m.hidden=false;
-      m.innerHTML = "<b>Cadastro enviado</b><br>Seus dados foram registrados e o administrador " +
-        "foi avisado. <b>O acesso só funciona depois da aprovação dele</b> — você pode fechar esta " +
-        "página e tentar entrar mais tarde."; }
+      m.innerHTML = (modoSenha === "recovery")
+        ? "<b>Senha alterada</b><br>Entre agora com a senha que você acabou de definir."
+        : "<b>Cadastro enviado</b><br>Seus dados foram registrados e o administrador " +
+          "foi avisado. <b>O acesso só funciona depois da aprovação dele</b> — você pode fechar esta " +
+          "página e tentar entrar mais tarde."; }
     setTimeout(()=>$("#inSenha").focus(), 60);
   }catch(e){
     msg.innerHTML = '<div class="aviso">Falha de rede ao salvar a senha. Tente de novo.</div>';
