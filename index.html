@@ -930,7 +930,6 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
       <div class="aba" role="tablist" id="loginAbas">
         <button role="tab" aria-selected="true" data-painel="entrar">Entrar</button>
         <button role="tab" aria-selected="false" data-painel="recuperar">Recuperar</button>
-        <button role="tab" aria-selected="false" data-painel="novo">Novo acesso</button>
       </div>
 
       <div class="painel on" id="pn-entrar">
@@ -969,43 +968,16 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <div id="recMsg"></div>
       </div>
 
-      <div class="painel" id="pn-novo">
-        <p class="sub">A conta é criada como <b>pendente</b> e só passa a funcionar depois que o administrador aprovar.</p>
-        <div class="field"><label for="inNovoNome">Nome completo</label><input id="inNovoNome" placeholder="Nome e sobrenome"></div>
-        <div class="field"><label for="inNovoEmail">E-mail</label><input id="inNovoEmail" type="email" placeholder="nome@clinica.com.br"></div>
-        <div class="field"><label for="inNovoPerfil">Perfil solicitado</label>
-          <select id="inNovoPerfil">
-            <option value="Dentista">Dentista</option>
-            <option value="Secretaria">Secretária</option>
-            <option value="Financeiro">Financeiro</option>
-            <option value="Estoque">Estoque</option>
-          </select></div>
-        <div class="field"><label for="inNovoSenha">Senha desejada</label>
-          <div class="comolho">
-          <input id="inNovoSenha" type="password" autocomplete="new-password" placeholder="mínimo 8 caracteres">
-          <button type="button" class="olho" data-olho="inNovoSenha" aria-pressed="false"
-            aria-label="Mostrar senha" title="Mostrar senha">
-            <svg class="aberto" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"></path>
-              <circle cx="12" cy="12" r="2.8"></circle>
-            </svg>
-            <svg class="riscado" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 12s3.2-6.5 8-6.5c1.2 0 2.3.2 3.3.7M20 12s-1 2-2.9 3.7"></path>
-              <path d="M9.5 9.6a3 3 0 1 0 4.3 4.2"></path>
-              <path d="M3.5 3.5l17 17"></path>
-            </svg>
-          </button>
-          </div></div>
-        <button class="btn primary wide" id="novoBtn">Solicitar acesso</button>
-        <div id="novoMsg"></div>
-      </div>
-
-      <div class="aviso">
-        <b>Protótipo — não use dados reais de pacientes.</b> Este login demonstra o fluxo e os níveis de
-        acesso, mas roda inteiro no navegador: sem servidor, sem criptografia, sem recuperação real de senha.
-        O banco seguro e rastreável já está modelado e aguarda ser criado na nuvem.
+      <!-- Este aviso vale SÓ para a demonstração. Ficava sempre visível e
+           dizia que não havia servidor nem criptografia — o que deixou de
+           ser verdade quando o banco na nuvem entrou no ar. Numa tela de
+           produção, avisar "protótipo, não use dados reais" ou assusta
+           quem deveria confiar, ou, pior, é ignorado e deixa de significar
+           alguma coisa no dia em que for verdade. -->
+      <div class="aviso" id="avisoDemo" hidden>
+        <b>Demonstração — não registre dados reais de paciente.</b> Esta cópia não alcança o banco da
+        clínica: tudo o que for digitado aqui fica só neste navegador, não é visto por mais ninguém e
+        some ao limpar os dados do site.
       </div>
     </div>
   </div>
@@ -1381,7 +1353,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v42 · 13/11/2026";
+const VERSAO = "v43 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -10292,6 +10264,8 @@ function pintarModo(){
   if(typeof renderAgente === "function") renderAgente();
   const h=$("#modoHint"), d=$("#demoHint");
   if(!nuvemTestada){ h.innerHTML="Verificando conexão com o banco…"; return; }
+  const av = $("#avisoDemo");
+  if(av) av.hidden = (MODO === "nuvem");
   if(MODO==="nuvem"){
     h.innerHTML = DB.pausado
       ? "<b>O banco não respondeu</b><br>No plano gratuito o projeto entra em pausa depois de cerca de "+
@@ -10425,23 +10399,12 @@ $("#recBtn").addEventListener("click", async ()=>{
   $("#recMsg").innerHTML='<div class="ok-msg">Se houver conta com esse e-mail, o link de redefinição chega em alguns minutos. '+
     'Confira o spam.'+(MODO==="nuvem"?'':'<br><b>Fora do banco nada é enviado</b> — o envio real depende do servidor.')+'</div>';
 });
-$("#novoBtn").addEventListener("click", ()=>{
-  if(window.esconderSenhas) window.esconderSenhas();
-  const nome=$("#inNovoNome").value.trim(), em=$("#inNovoEmail").value.trim(),
-        perfil=$("#inNovoPerfil").value, senha=$("#inNovoSenha").value;
-  if(nome.split(" ").filter(Boolean).length<2){ toast("Informe nome e sobrenome."); return; }
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(em)){ toast("E-mail inválido."); return; }
-  if(senha.length<8){ toast("A senha precisa ter ao menos 8 caracteres."); return; }
-  if(S.usuarios.some(u=>norm(u.email)===norm(em)) || S.solicitacoes.some(s=>norm(s.email)===norm(em) && s.status==="pendente")){
-    toast("Já existe conta ou pedido com esse e-mail."); return;
-  }
-  S.solicitacoes.push({id:"s"+Date.now(), nome, email:em, perfil,
-    senha: MODO==="nuvem" ? "" : senha, em:ISO(hoje), status:"pendente"});
-  save(); salvarFila();
-  $("#novoMsg").innerHTML='<div class="ok-msg">Pedido registrado. O acesso só funciona depois que o administrador aprovar — '+
-    'ele já vê a solicitação no painel dele.</div>';
-  ["inNovoNome","inNovoEmail","inNovoSenha"].forEach(i=>document.getElementById(i).value="");
-});
+/* O auto-cadastro saiu da tela de login. Quem define quem entra e com
+   qual perfil é o administrador, em Configurações -> Equipe — não a
+   própria pessoa. Além da regra do consultório, era uma porta aberta:
+   o pedido criava uma conta de verdade no serviço de autenticação antes
+   de qualquer aprovação, e isso num sistema de prontuário é convite. */
+
 /* Trocar de usuário é sair e entrar de novo — a diferença é que a
    pessoa NÃO precisa fechar nada: volta para o login com o campo pronto.
    O botão existe porque "⏻ Sair" é lido como "fechar o sistema", e quem
