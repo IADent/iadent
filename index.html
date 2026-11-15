@@ -1522,7 +1522,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v56 · 15/11/2026";
+const VERSAO = "v57 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -9570,8 +9570,15 @@ function ligarConfig(){
   }));
   const es = $("#eqSalvar");
   if(es) es.addEventListener("click", async ()=>{
+    /* A coluna no banco é `celular`, não `telefone` — a tela chama de
+       telefone porque é assim que se fala no balcão. Mandar o nome da
+       tela fazia o banco recusar a gravação inteira, e por isso trocar
+       de perfil não funcionava. */
+    const telDig = $("#eqTel").value.replace(/\D/g, "");
+    if(telDig && !/^[1-9][1-9]9[0-9]{8}$/.test(telDig)){
+      toast("Celular inválido — use DDD e os nove dígitos."); $("#eqTel").focus(); return; }
     const d = {nome:$("#eqNome").value.trim(), perfil:$("#eqPerfil").value,
-      cro:$("#eqCro").value.trim()||null, telefone:$("#eqTel").value.trim()||null,
+      cro:$("#eqCro").value.trim()||null, celular: telDig || null,
       especialidade:$("#eqEsp").value.trim()||null, cor:equipeEdit.cor||null};
     if(d.nome.split(" ").filter(Boolean).length<2){ toast("Informe nome e sobrenome."); return; }
     if($("#eqAtivo")) d.ativo = $("#eqAtivo").checked;
@@ -9584,6 +9591,10 @@ function ligarConfig(){
       renderConfig(); renderAll();
       toast("Perfil salvo.");
     }catch(e){
+      /* A recusa do banco (último administrador, celular inválido) chega
+         como texto cru do Postgres. Mostrar inteiro assusta e não ajuda;
+         mostrar genérico esconde a razão. Repassamos a mensagem, que foi
+         escrita para ser lida por pessoa. */
       // a trava do último administrador chega por aqui, e a mensagem do
       // banco já explica o que fazer
       toast(e.message); es.disabled=false;
