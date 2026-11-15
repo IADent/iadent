@@ -1493,7 +1493,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v51 · 15/11/2026";
+const VERSAO = "v52 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -8802,6 +8802,25 @@ const CFG = {
     await DB.rest("PATCH","usuarios?id=eq."+id, d);
   },
   /* chama a função no servidor; a chave de serviço nunca passa por aqui */
+  /* Aprovação do cadastro. A decisão é do administrador e a checagem
+     real está no banco: a função aprovar_usuario recusa quem não for
+     administrador da própria clínica. O botão aqui é conveniência, não
+     é a trava. */
+  async aprovar(id){
+    if(MODO!=="nuvem") throw new Error("Aprovar acesso exige o banco na nuvem.");
+    const r = await fetch(BACKEND.url+"/rest/v1/rpc/aprovar_usuario", {
+      method:"POST",
+      headers:{apikey:BACKEND.key, Authorization:"Bearer "+DB.tok,
+               "Content-Type":"application/json"},
+      body: JSON.stringify({p_id: id})
+    });
+    if(!r.ok){
+      const t = await r.text(); let d={};
+      try{ d = JSON.parse(t); }catch(e){}
+      throw new Error((d && (d.message||d.hint)) || ("erro "+r.status));
+    }
+  },
+
   async criarAcesso(d){
     if(MODO!=="nuvem") throw new Error("Criar acesso exige o banco na nuvem — esta cópia é de demonstração.");
     const r = await fetch(BACKEND.url+"/functions/v1/criar-acesso", {
@@ -8841,6 +8860,9 @@ async function abrirConfig(aba){
 /* Uma lista só de abas, usada para desenhar a tela E para decidir se o
    botão de configurações aparece. Separar as duas coisas é como se
    chega a um botão que abre uma tela vazia. */
+/* pendentes = pedidos antigos + cadastros com status pendente. O número
+   aparece na aba para o administrador não precisar entrar para descobrir
+   que alguém está esperando. */
 function abasConfigDe(pendentes){
   const abas = [];
   if(pode("admin")){
@@ -9140,7 +9162,33 @@ function htmlSalas(){
 /* ---------- equipe ---------- */
 let equipeEdit = null, convidando = false;
 function htmlEquipe(){
-  const lista = cfg.equipe.map(u=>{
+  /* Pendentes vêm primeiro e destacados. Cadastro parado à espera de
+     aprovação é pessoa parada sem conseguir trabalhar — não pode ficar
+     perdido no meio da lista de quem já entra. */
+  const pend = (cfg.equipe||[]).filter(u => u.status === "pendente");
+  const aprovacoes = !pend.length ? "" : `<div class="card" style="margin-bottom:10px;
+      border-left:3px solid var(--warn)">
+    <div class="eyebrow">Aguardando sua aprovação (${pend.length})</div>
+    <div class="list" style="margin-top:9px">` + pend.map(u=>{
+      const rot = PERFIS[PERFIL_DB2APP[u.perfil]] ? PERFIS[PERFIL_DB2APP[u.perfil]].rotulo : u.perfil;
+      const falta = [];
+      if(!u.telefone) falta.push("celular");
+      return `<div class="item">
+        <div class="av">${u.nome.split(" ").map(x=>x[0]).slice(0,2).join("")}</div>
+        <div class="main"><b>${u.nome}</b>
+          <small>${rot}${u.cro?" · "+u.cro:""}</small>
+          <small>${cfg.emails[u.id]||"e-mail não disponível"}${u.telefone?" · "+u.telefone:""}</small>
+          ${falta.length?`<small style="color:var(--warn)">cadastro incompleto: ${falta.join(", ")}</small>`:""}
+        </div>
+        <div class="end"><button class="btn primary" data-aprovar="${u.id}">Aprovar</button></div>
+      </div>`;
+    }).join("") + `</div>
+    <div class="stage" style="margin-top:9px">Aprovar libera a entrada com o perfil
+      <b>que você escolheu no convite</b>. Confira o nome e o e-mail antes — depois
+      disso a pessoa passa a enxergar o que o perfil permite.</div>
+  </div>`;
+
+  const lista = cfg.equipe.filter(u => u.status !== "pendente").map(u=>{
     const rot = PERFIS[PERFIL_DB2APP[u.perfil]] ? PERFIS[PERFIL_DB2APP[u.perfil]].rotulo : u.perfil;
     const eu = u.id === (DB.meuId || (usuario&&usuario.id));
     return `<div class="item">
@@ -9217,7 +9265,7 @@ function htmlEquipe(){
       </div></div>`;
   }
 
-  return `${form}
+  return `${aprovacoes}${form}
     ${(!convidando && !equipeEdit)?'<button class="btn primary wide" id="novoAcesso" style="margin-bottom:10px">+ Novo acesso</button>':""}
     <div class="list">${lista}</div>`;
 }
@@ -9426,7 +9474,20 @@ function ligarConfig(){
     }catch(e){ toast("Não salvou: "+e.message); ss.disabled=false; }
   });
 
-  // equipe
+  // equipe — aprovação de cadastro pendente
+  $$("[data-aprovar]").forEach(b=>b.addEventListener("click", async ()=>{
+    const id = b.dataset.aprovar;
+    b.disabled = true; b.textContent = "Aprovando…";
+    try{
+      await CFG.aprovar(id);
+      await CFG.carregar(); renderConfig();
+      toast("Acesso aprovado. A pessoa já pode entrar.");
+    }catch(e){
+      toast("Não aprovou: " + e.message);
+      b.disabled = false; b.textContent = "Aprovar";
+    }
+  }));
+
   const na = $("#novoAcesso");
   if(na) na.addEventListener("click", ()=>{ convidando=true; equipeEdit=null; renderConfig(); });
   const nc = $("#nvCancelar");
@@ -12403,6 +12464,9 @@ window.MD = {
   /* a identidade da clínica no alto da tela vem do banco: o teste precisa
      alcançar a função para provar que nenhum nome está preso no código */
   pintarClinica, ligarRodape, pintarRodape,
+  /* a tela de equipe fica acessível ao teste: aprovação é controle de
+     acesso, e conferir só pelo olho é como não conferir */
+  htmlEquipe, cfg(){ return cfg; }, CFG,
   get usuario(){ return usuario; },
   get modo(){ return MODO; },
   projetar, taxaPara, resumoPaciente, fluxoPorMes, abrirPaciente, numBR, hojeISO, cent,
