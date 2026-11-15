@@ -1522,7 +1522,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v57 · 15/11/2026";
+const VERSAO = "v58 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -9217,7 +9217,14 @@ function htmlEquipe(){
       disso a pessoa passa a enxergar o que o perfil permite.</div>
   </div>`;
 
-  const lista = cfg.equipe.filter(u => u.status !== "pendente").map(u=>{
+  /* Quem está sendo editado sai da lista: ficar nos dois lugares faz
+     parecer que são dois registros, e quem olha de relance não sabe
+     qual dos dois está mexendo. Some enquanto edita, volta ao salvar
+     ou cancelar. */
+  const lista = cfg.equipe
+    .filter(u => u.status !== "pendente")
+    .filter(u => !(equipeEdit && u.id === equipeEdit.id))
+    .map(u=>{
     const rot = PERFIS[PERFIL_DB2APP[u.perfil]] ? PERFIS[PERFIL_DB2APP[u.perfil]].rotulo : u.perfil;
     const eu = u.id === (DB.meuId || (usuario&&usuario.id));
     return `<div class="item">
@@ -12546,6 +12553,7 @@ window.MD = {
   /* a tela de equipe fica acessível ao teste: aprovação é controle de
      acesso, e conferir só pelo olho é como não conferir */
   htmlEquipe, cfg(){ return cfg; }, CFG, renderConfig, abrirConfig,
+  get equipeEdit(){ return equipeEdit; }, set equipeEdit(v){ equipeEdit = v; },
   get usuario(){ return usuario; },
   get modo(){ return MODO; },
   projetar, taxaPara, resumoPaciente, fluxoPorMes, abrirPaciente, numBR, hojeISO, cent,
