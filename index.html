@@ -1283,6 +1283,7 @@ const PERFIS = {
   Administrador:{rotulo:"Administrador", desc:"Acesso total e aprovação de usuários",
     telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
     atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, admin:true,
+    custo:true,
     parceiros:true, parceirosEdita:true,
     valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
     lancaPagamento:true,
@@ -1290,6 +1291,7 @@ const PERFIS = {
   Dentista:{rotulo:"Dentista", desc:"Atende, edita prontuário e agenda",
     telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
     atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:true, cadastro:true, admin:false,
+    custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:true, projecao:true, relatorios:false,
     /* lancaPagamento:false espelha a política do banco: só
@@ -1308,6 +1310,7 @@ const PERFIS = {
        parado. */
     telas:["pacientes","agenda","parceiros"],
     atender:false, prontuario:false, verClinico:false, estoque:false, agenda:true, financeiro:false, cadastro:true, admin:false,
+    custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:true, projecao:false, relatorios:false,
     lancaPagamento:true,
@@ -1318,6 +1321,7 @@ const PERFIS = {
        mexe no cadastro deles */
     telas:["financeiro","agenda","parceiros"],
     atender:false, prontuario:false, verClinico:false, estoque:false, agenda:false, financeiro:true, cadastro:false, admin:false,
+    custo:true,
     parceiros:true, parceirosEdita:false,
     valores:true, lancaLote:false, caixa:true, projecao:true, relatorios:true,
     lancaPagamento:true,
@@ -1326,18 +1330,17 @@ const PERFIS = {
     telas:["estoque"],
     atender:false, prontuario:false, verClinico:false, estoque:true, agenda:false, financeiro:false, cadastro:false, admin:false,
     parceiros:false, parceirosEdita:false,
-    valores:true, lancaLote:true, caixa:false, projecao:false, relatorios:true,
+    /* custo SIM, valores NÃO: para lançar a nota fiscal é preciso ver
+       quanto se pagou pelo material; preço de venda, margem de lucro e
+       taxas de maquininha são da clínica e não passam por aqui. Eram uma
+       chave só, e por isso quem lançava nota enxergava a margem. */
+    custo:true, valores:false, lancaLote:true, caixa:false, projecao:false, relatorios:false,
     lancaPagamento:false,
     precos:false, precoTodos:false, soMinhas:false}
 };
-const USUARIOS_SEED = [
-  {id:"u1", nome:"Dra. Helena Prado", email:"helena@clinica.com.br", perfil:"Dentista",      senha:"dentista",   ativo:true},
-  {id:"u2", nome:"Camila Rezende",    email:"camila@clinica.com.br", perfil:"Secretaria",    senha:"secretaria", ativo:true},
-  {id:"u3", nome:"Marcos Vieira",     email:"marcos@clinica.com.br", perfil:"Financeiro",    senha:"financeiro", ativo:true},
-  {id:"u4", nome:"Patrícia Alencar",  email:"patricia@clinica.com.br",perfil:"Estoque",      senha:"estoque",    ativo:true},
-  {id:"u5", nome:"Luiz Raminelli",    email:"admin@clinica.com.br",  perfil:"Administrador", senha:"admin",      ativo:true},
-  {id:"u6", nome:"Dr. Paulo Arantes", email:"paulo@clinica.com.br",  perfil:"Dentista",      senha:"dentista2",  ativo:true}
-];
+/* Os usuários fictícios foram removidos: o sistema entrou em produção e
+   acesso agora só existe se o administrador criar. */
+const USUARIOS_SEED = [];
 let usuario = null;
 const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 
@@ -1353,7 +1356,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v43 · 15/11/2026";
+const VERSAO = "v44 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1762,7 +1765,7 @@ const DB = {
     S.validade = alertas;
 
     S.custos = null;
-    if(pode("valores")){
+    if(pode("custo")){
       try{
         const c = await DB.rest("GET","lotes_custo?select=lote_id,custo_unitario,nf_valor_total");
         S.custos = {}; c.forEach(x=>{ S.custos[x.lote_id]=x; });
@@ -1816,7 +1819,7 @@ const DB = {
     if(!mid) throw new Error("Material sem correspondência no banco.");
     await DB.rest("PATCH","materiais?id=eq."+mid, {margem_pct: pct});
     const c = catById(localId); if(c) c.margem = pct;
-    if(pode("valores")){
+    if(pode("custo")){
       S.valorizado = await DB.rest("GET","vw_estoque_valorizado?select=material_id,codigo,nome,"+
         "saldo,margem_pct,custo_total,custo_medio,valor_com_margem,saldo_sem_custo");
     }
@@ -6782,7 +6785,7 @@ function selo(l){
   return "";
 }
 function valorDe(matId){
-  if(!pode("valores") || !S.valorizado) return null;
+  if(!pode("custo") || !S.valorizado) return null;
   /* Na nuvem a view devolve o UUID do material; no modo demonstração a
      conta é feita aqui e a chave é o id local. Procurar só pelo UUID
      fazia o custo médio sumir da lista inteira na demonstração. */
@@ -7839,7 +7842,7 @@ function renderEstoque(){
     <div class="tile crit"><b>${crit.length}</b><span>repor hoje</span></div>`;
   if(vencidos) tiles+=`<div class="tile crit"><b>${vencidos}</b><span>lotes vencidos</span></div>`;
   if(neg.length) tiles+=`<div class="tile crit"><b>${neg.length}</b><span>saldo negativo</span></div>`;
-  if(pode("valores") && S.valorizado){
+  if(pode("custo") && S.valorizado){
     const total=S.valorizado.reduce((s,v)=>s+Number(v.custo_total||0),0);
     const comMargem=S.valorizado.reduce((s,v)=>s+Number(v.valor_com_margem||0),0);
     const semNota=S.valorizado.reduce((s,v)=>s+Number(v.saldo_sem_custo||0),0);
@@ -7877,7 +7880,7 @@ function renderEstoque(){
             <small>${c.codigo?`<span class="mono">${c.codigo}</span> · `:""}mín. ${fmtQtd(c.min)} ${c.un} · saldo <span class="mono">${fmtQtd(e.qtd)}</span></small>
             ${sug?`<small style="color:var(--accent)">usar primeiro: lote <b>${sug.codigo_lote}</b>${sug.validade?` · vence ${fmtData(sug.validade)}`:" · sem validade"}</small>`:
                    `<small style="color:var(--ink-3)">nenhum lote lançado</small>`}
-            ${val && pode("valores") && val.custo_medio!==null ?
+            ${val && pode("custo") && val.custo_medio!==null ?
               `<small>custo médio <span class="mono">${fmtBRL(val.custo_medio)}</span> · imobilizado <span class="mono">${fmtBRL(val.custo_total)}</span> · margem <span class="mono">${fmtQtd(val.margem_pct)}%</span></small>`:""}
             <div class="bar"><i class="${negativo?"crit":(st.k==="ok"?"":st.k)}" style="width:${pct}%"></i></div>
           </div>
@@ -7921,7 +7924,7 @@ function painelLotes(matId){
   const linhas = ls.map((l,i)=>{
     const dias = l.validade ? Math.round((new Date(l.validade)-new Date(hojeISO()))/86400000) : null;
     const cor = dias===null ? "" : dias<0 ? "crit" : dias<=90 ? "warn" : "ok";
-    const custo = pode("valores") && S.custos && S.custos[l.id] ? S.custos[l.id] : null;
+    const custo = pode("custo") && S.custos && S.custos[l.id] ? S.custos[l.id] : null;
     return `<div style="display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)">
       <span class="pill ${i===0?"accent":"neutral"}" style="flex:none">${i===0?"usar 1º":"#"+(i+1)}</span>
       <div style="flex:1;min-width:0">
@@ -10282,24 +10285,15 @@ function pintarModo(){
       if(d) d.hidden=true;
       return;
     }
-    h.innerHTML="<b>Modo demonstração</b><br>Esta cópia não alcança o banco e grava só neste navegador. "+
-      "Use o endereço publicado da clínica para trabalhar de verdade.";
-    if(d){
-      d.hidden=false;
-      /* Entrar com um toque em cada perfil: quem está testando a
-         permissão de cinco perfis não deveria digitar e-mail e senha
-         cinco vezes. Só na demonstração — na nuvem, senha é senha. */
-      d.innerHTML = "<b>Acessos de demonstração</b> — toque para entrar<br>"+
-        `<div class="row" style="flex-wrap:wrap;margin-top:6px">` +
-        USUARIOS_SEED.map(u=>`<button class="minibtn" data-demo="${u.email}"
-          data-senha="${u.senha}">${PERFIS[u.perfil].rotulo}</button>`).join("") +
-        `</div><div style="margin-top:6px;font-size:11px;opacity:.75">`+
-        USUARIOS_SEED.map(u=>`${u.email} · <b>${u.senha}</b>`).join(" · ")+`</div>`;
-      d.querySelectorAll("[data-demo]").forEach(b=>b.addEventListener("click", ()=>{
-        $("#inUser").value = b.dataset.demo; $("#inSenha").value = b.dataset.senha;
-        $("#entrarBtn").click();
-      }));
-    }
+    /* Sem o banco da clínica não há sistema — e não há mais "entrar de
+       mentira". Os acessos de demonstração saíram: num endereço que
+       atende paciente de verdade, oferecer um login falso é convidar
+       alguém a registrar atendimento num lugar que ninguém lê. Quem
+       quiser demonstrar o produto publica uma cópia em outro endereço. */
+    h.innerHTML="<b>Não foi possível alcançar o banco da clínica</b><br>"+
+      "O sistema não entra sem o banco. Verifique a conexão e recarregue a página. "+
+      "Se persistir, o projeto pode estar pausado no Supabase.";
+    if(d) d.hidden=true;
   }
   const sel=$("#modoBadge");
   if(sel){ sel.textContent = MODO==="nuvem" ? "nuvem" : "demo";
@@ -11627,7 +11621,7 @@ async function gerarRelatorio(){
 function relatorioLocal(de, ate){
   const movs = (S.movimentos||[]);
   // custo unitário do lote, quando a clínica lançou a nota
-  const cu = loteId => (pode("valores") && S.custos && S.custos[loteId])
+  const cu = loteId => (pode("custo") && S.custos && S.custos[loteId])
     ? Number(S.custos[loteId].custo_unitario) : null;
   const valorDosMovs = lista => {
     let total = 0, algum = false;
@@ -11651,14 +11645,14 @@ function relatorioLocal(de, ate){
     ls.forEach(l=>{ const k = cu(l.id);
       if(k===null) saldoSemCusto += Number(l.saldo);
       else { custoTotal += Number(l.saldo)*k; saldoComCusto += Number(l.saldo); } });
-    const temCusto = pode("valores") && saldoComCusto > 0;
+    const temCusto = pode("custo") && saldoComCusto > 0;
     return {material_id:c.id, codigo:c.codigo, material:c.nome, categoria:c.cat, unidade:c.un,
       saldo_inicial:ini, entradas_qtd:ent, entradas_valor:valorDosMovs(entM),
       saidas_qtd:sai, saidas_valor:valorDosMovs(saiM),
       saldo_final: e?e.qtd:ini+ent-sai,
       custo_medio: temCusto ? cent(custoTotal/saldoComCusto) : null,
       valor_final: temCusto ? cent(custoTotal) : null,
-      qtd_sem_custo: pode("valores") ? saldoSemCusto : null};
+      qtd_sem_custo: pode("custo") ? saldoSemCusto : null};
   });
   const posicao = [];
   CATALOGO.forEach(c=>{
@@ -11691,7 +11685,7 @@ function relatorioLocal(de, ate){
       unidade:c.un, entrada:m.qtd>0?m.qtd:null, saida:m.qtd<0?-m.qtd:null,
       codigo_lote:l?l.codigo_lote:null, validade:l?l.validade:null,
       nf_numero:l?l.nf_numero:null, fornecedor:l?l.fornecedor:null,
-      valor: (pode("valores") && S.custos && m.lote && S.custos[m.lote])
+      valor: (pode("custo") && S.custos && m.lote && S.custos[m.lote])
              ? cent(Math.abs(m.qtd)*Number(S.custos[m.lote].custo_unitario)) : null,
       paciente:pc?pc.nome:null, atendimento_id:m.atd||null,
       observacao:m.obs||null};
@@ -11841,7 +11835,7 @@ function htmlRelatorio(){
       </table></div>
       <div class="stage">Movimento não se apaga nem se edita: correção entra como novo
         movimento, com autor e data. É isso que faz a trilha valer como auditoria.
-        ${!pode("valores")?"Os valores aparecem em branco porque seu perfil não tem acesso ao custo.":""}
+        ${!pode("custo")?"Os valores aparecem em branco porque seu perfil não tem acesso ao custo.":""}
         ${d.auditoria.some(x=>!x.paciente && x.atendimento_id)?"Onde o paciente aparece como “atendimento”, o perfil atual não lê o cadastro de pacientes.":""}</div>`;
 }
 
