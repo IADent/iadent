@@ -847,7 +847,12 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 
 .toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%) translateY(12px);
   background:var(--ink);color:var(--ground);padding:11px 16px;border-radius:var(--r-sm);font-size:13px;
-  font-weight:500;z-index:50;opacity:0;transition:.25s ease;max-width:min(390px,90vw);text-align:center;
+  /* z-index 200: o aviso tem de ficar ACIMA de tudo — da tela de login
+     (100) e do popup de senha (110). Estava em 50, e por isso TODA
+     mensagem de erro de login era desenhada atrás da própria tela de
+     login e nunca chegou a ser vista: quem errava a senha não recebia
+     resposta nenhuma e o botão parecia não reagir. */
+  font-weight:500;z-index:200;opacity:0;transition:.25s ease;max-width:min(390px,90vw);text-align:center;
   box-shadow:var(--shadow-lg)}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .backlink{font-size:12.5px;color:var(--accent);font-weight:600;padding:2px 0;text-align:left}
@@ -1488,7 +1493,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v50 · 15/11/2026";
+const VERSAO = "v51 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
