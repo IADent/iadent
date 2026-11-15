@@ -1333,8 +1333,33 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
 
     <div class="field"><label for="inSenha2">Repita a senha</label>
       <input id="inSenha2" type="password" autocomplete="new-password" placeholder="digite de novo"></div>
+
+    <!-- Dados obrigatórios do cadastro. Ficam na mesma tela da senha de
+         propósito: duas etapas separadas viram cadastro pela metade, e
+         conta sem CPF nem telefone não serve para auditoria nem para
+         achar a pessoa quando o sistema precisa dela. -->
+    <div id="dadosCadastro">
+      <div class="field"><label for="cadNome">Nome completo</label>
+        <input id="cadNome" autocomplete="name" placeholder="Nome e sobrenome"></div>
+      <div class="field"><label for="cadCpf">CPF</label>
+        <input id="cadCpf" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" maxlength="14"></div>
+      <div class="field"><label for="cadNasc">Data de nascimento</label>
+        <input id="cadNasc" type="date"></div>
+      <div class="field"><label for="cadSexo">Sexo</label>
+        <select id="cadSexo">
+          <option value="">Selecione</option>
+          <option value="feminino">Feminino</option>
+          <option value="masculino">Masculino</option>
+          <option value="outro">Outro</option>
+          <option value="nao_informado">Prefiro não informar</option>
+        </select></div>
+      <div class="field"><label for="cadCel">Celular com DDD</label>
+        <input id="cadCel" inputmode="numeric" autocomplete="tel" placeholder="(11) 99999-9999" maxlength="16"></div>
+      <div id="cadErro"></div>
+    </div>
+
     <div id="senhaMsg"></div>
-    <button class="btn primary wide" id="senhaBtn" disabled>Salvar senha</button>
+    <button class="btn primary wide" id="senhaBtn" disabled>Concluir cadastro</button>
   </div>
 </div>
 
@@ -1463,7 +1488,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v48 · 15/11/2026";
+const VERSAO = "v49 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1648,17 +1673,25 @@ const DB = {
   async quemSou(){
     let eu;
     try{
-      eu = await DB.rest("GET","usuarios?select=id,nome,perfil,ativo,clinica_id,cro");
+      eu = await DB.rest("GET","usuarios?select=id,nome,perfil,ativo,clinica_id,cro,status");
     }catch(e){
       if(e.status===401 && await DB.renovar())
-        eu = await DB.rest("GET","usuarios?select=id,nome,perfil,ativo,clinica_id,cro");
+        eu = await DB.rest("GET","usuarios?select=id,nome,perfil,ativo,clinica_id,cro,status");
       else throw e;
     }
     const sub = DB.sub();
     const meu = eu.find(u=>u.id===sub) || eu[0];
     if(!meu) throw new Error("Sua conta existe no login mas não está na tabela usuarios. "+
       "Um administrador precisa vincular o acesso ao perfil.");
-    if(!meu.ativo) throw new Error("Este acesso está desativado. Fale com o administrador.");
+    /* pendente e desativado são situações diferentes e a pessoa precisa
+       saber qual é a dela: uma espera, a outra foi encerrada. Dizer
+       "desativado" para quem acabou de se cadastrar faz a pessoa achar
+       que errou alguma coisa e tentar de novo sem parar. */
+    if(meu.status === "pendente")
+      throw new Error("Aguardando aprovação do administrador. "+
+        "Seu cadastro foi recebido e o acesso é liberado assim que ele aprovar.");
+    if(!meu.ativo || meu.status === "inativo")
+      throw new Error("Este acesso está desativado. Fale com o administrador.");
     DB.clinica = meu.clinica_id; DB.meuId = meu.id;
     S.usuarios = eu.map(u=>({id:u.id, nome:u.nome, email:"", perfil:PERFIL_DB2APP[u.perfil],
       ativo:u.ativo, nuvem:true}));
@@ -12420,6 +12453,61 @@ const REGRAS_SENHA = [
 ];
 let tokenSenha = null;
 
+/* As mesmas regras valem no banco (0025). Aqui existem para avisar
+   enquanto se digita; lá existem para valer. Validar só na tela é
+   decoração: quem manda o pedido direto passa por cima. */
+function soDigitos(v){ return (v||"").replace(/\D/g, ""); }
+
+function cpfValido(v){
+  const d = soDigitos(v);
+  if(d.length !== 11) return false;
+  if(/^(\d)\1{10}$/.test(d)) return false;        // 111.111.111-11 e irmãos
+  let s = 0;
+  for(let i=0;i<9;i++) s += Number(d[i]) * (10 - i);
+  let r = (s * 10) % 11; if(r === 10) r = 0;
+  if(r !== Number(d[9])) return false;
+  s = 0;
+  for(let i=0;i<10;i++) s += Number(d[i]) * (11 - i);
+  r = (s * 10) % 11; if(r === 10) r = 0;
+  return r === Number(d[10]);
+}
+function fmtCpf(v){
+  const d = soDigitos(v).slice(0,11);
+  return d.replace(/^(\d{3})(\d)/,"$1.$2").replace(/^(\d{3})\.(\d{3})(\d)/,"$1.$2.$3")
+          .replace(/\.(\d{3})(\d{1,2})$/,".$1-$2");
+}
+/* celular: DDD de 11 a 99 e nono dígito — fixo não serve para contato
+   de plantão, que é o motivo de o campo existir */
+function celularValido(v){ return /^[1-9][1-9]9[0-9]{8}$/.test(soDigitos(v)); }
+function fmtCel(v){
+  const d = soDigitos(v).slice(0,11);
+  if(d.length <= 2) return d.length ? "("+d : "";
+  if(d.length <= 7) return "("+d.slice(0,2)+") "+d.slice(2);
+  return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
+}
+function nascimentoValido(v){
+  if(!v) return false;
+  const d = new Date(v+"T12:00:00");
+  if(isNaN(d)) return false;
+  const anos = (Date.now() - d.getTime()) / (365.2425*24*3600*1000);
+  return anos >= 16 && anos <= 110;
+}
+function cadastroCompleto(){
+  return $("#cadNome").value.trim().split(/\s+/).filter(Boolean).length >= 2
+      && cpfValido($("#cadCpf").value)
+      && nascimentoValido($("#cadNasc").value)
+      && !!$("#cadSexo").value
+      && celularValido($("#cadCel").value);
+}
+function primeiroErroCadastro(){
+  if($("#cadNome").value.trim().split(/\s+/).filter(Boolean).length < 2) return "Informe nome e sobrenome.";
+  if(!cpfValido($("#cadCpf").value)) return "CPF inválido — confira os números.";
+  if(!nascimentoValido($("#cadNasc").value)) return "Data de nascimento inválida.";
+  if(!$("#cadSexo").value) return "Selecione o sexo.";
+  if(!celularValido($("#cadCel").value)) return "Celular inválido — use DDD e os nove dígitos.";
+  return "";
+}
+
 function senhaValida(v){ return REGRAS_SENHA.every(([,f]) => f(v)); }
 
 function pintarRegrasSenha(){
@@ -12429,7 +12517,11 @@ function pintarRegrasSenha(){
     if(li) li.classList.toggle("ok", f(v));
   });
   const v2 = $("#inSenha2").value;
-  $("#senhaBtn").disabled = !(senhaValida(v) && v === v2);
+  const e = primeiroErroCadastro();
+  const cx = $("#cadErro");
+  if(cx) cx.innerHTML = (e && ($("#cadNome").value || $("#cadCpf").value || $("#cadCel").value))
+    ? '<div class="aviso">'+e+'</div>' : "";
+  $("#senhaBtn").disabled = !(senhaValida(v) && v === v2 && cadastroCompleto());
 }
 
 /* o e-mail sai do próprio token, só para a pessoa confirmar que está
@@ -12497,6 +12589,35 @@ async function salvarNovaSenha(){
           : motivo) + "</div>";
       b.disabled = false; b.textContent = "Salvar senha"; return;
     }
+    /* a senha foi aceita; agora os dados pessoais, pela função do banco
+       que escreve só os campos da própria pessoa e nunca perfil ou
+       estado de aprovação */
+    try{
+      const rc = await fetch(BACKEND.url + "/rest/v1/rpc/completar_cadastro", {
+        method:"POST",
+        headers:{apikey:BACKEND.key, Authorization:"Bearer "+tokenSenha,
+                 "Content-Type":"application/json"},
+        body: JSON.stringify({
+          p_nome: $("#cadNome").value.trim(),
+          p_cpf: soDigitos($("#cadCpf").value),
+          p_nascimento: $("#cadNasc").value,
+          p_sexo: $("#cadSexo").value,
+          p_celular: soDigitos($("#cadCel").value)
+        })
+      });
+      if(!rc.ok){
+        const t = await rc.text();
+        let dd = {}; try{ dd = JSON.parse(t); }catch(e2){}
+        msg.innerHTML = '<div class="aviso"><b>A senha foi salva, mas o cadastro não.</b><br>' +
+          ((dd && (dd.message || dd.hint)) || "Tente entrar e completar depois, ou fale com o administrador.") +
+          '</div>';
+        b.disabled = false; b.textContent = "Concluir cadastro"; return;
+      }
+    }catch(e){
+      msg.innerHTML = '<div class="aviso">A senha foi salva, mas o cadastro falhou por rede. Tente de novo.</div>';
+      b.disabled = false; b.textContent = "Concluir cadastro"; return;
+    }
+
     const em = emailDoToken(tokenSenha);
     tokenSenha = null;
     $("#inSenha1").value = ""; $("#inSenha2").value = "";
@@ -12504,7 +12625,9 @@ async function salvarNovaSenha(){
     if(em) $("#inUser").value = em;
     const m = $("#modoHint");
     if(m){ m.hidden=false;
-      m.innerHTML = "<b>Senha criada</b><br>Entre agora com a senha que você acabou de definir."; }
+      m.innerHTML = "<b>Cadastro enviado</b><br>Seus dados foram registrados e o administrador " +
+        "foi avisado. <b>O acesso só funciona depois da aprovação dele</b> — você pode fechar esta " +
+        "página e tentar entrar mais tarde."; }
     setTimeout(()=>$("#inSenha").focus(), 60);
   }catch(e){
     msg.innerHTML = '<div class="aviso">Falha de rede ao salvar a senha. Tente de novo.</div>';
@@ -12512,6 +12635,12 @@ async function salvarNovaSenha(){
   }
 }
 
+["cadNome","cadNasc","cadSexo"].forEach(id=>{
+  const el = document.getElementById(id);
+  if(el) el.addEventListener("input", pintarRegrasSenha);
+});
+$("#cadCpf").addEventListener("input", e=>{ e.target.value = fmtCpf(e.target.value); pintarRegrasSenha(); });
+$("#cadCel").addEventListener("input", e=>{ e.target.value = fmtCel(e.target.value); pintarRegrasSenha(); });
 $("#inSenha1").addEventListener("input", pintarRegrasSenha);
 $("#inSenha2").addEventListener("input", pintarRegrasSenha);
 $("#senhaBtn").addEventListener("click", salvarNovaSenha);
