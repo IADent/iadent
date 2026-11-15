@@ -1494,7 +1494,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v54 · 15/11/2026";
+const VERSAO = "v55 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -8764,7 +8764,7 @@ const CFG = {
       DB.rest("GET","clinicas?select=id,nome,razao_social,cnpj,telefone,email,cep,logradouro,"+
         "numero,complemento,bairro,cidade,uf,cro_clinica,hora_abertura,hora_fechamento&limit=1"),
       DB.rest("GET","salas?select=id,nome,descricao,tipo,cor,ativa,ordem&order=ordem"),
-      DB.rest("GET","vw_equipe?select=id,nome,perfil,cro,telefone,especialidade,cor,ativo,criado_em&order=nome")
+      DB.rest("GET","vw_equipe?select=id,nome,email,perfil,cro,telefone,especialidade,cor,ativo,status,criado_em&order=nome")
     ]);
     cfg.clinica = cl[0] || null;
     cfg.salas = sl;
@@ -9243,6 +9243,16 @@ function htmlEquipe(){
       <div style="display:flex;flex-direction:column;gap:11px;margin-top:9px">
         <div class="field"><label for="eqNome">Nome</label>
           <input id="eqNome" value="${u.nome.replace(/"/g,"&quot;")}" autocomplete="off"></div>
+        <!-- O e-mail aparece, mas não se edita aqui. Ele é a credencial
+             de login, guardada no serviço de autenticação; trocar só
+             nesta tabela deixaria a pessoa entrando pelo endereço antigo
+             e a lista mostrando o novo — a pior combinação possível. -->
+        <div class="field"><label for="eqEmail">E-mail de acesso</label>
+          <input id="eqEmail" class="travado" readonly
+            value="${(u.email||"não disponível").replace(/"/g,"&quot;")}"></div>
+        <div class="stage" style="margin:0">O e-mail é a credencial de entrada e não se
+          altera por aqui. Para trocar, desative este acesso e envie um convite novo para
+          o endereço correto — assim a pessoa define a senha dela e nada fica pela metade.</div>
         <div class="grid2">
           <div class="field"><label for="eqPerfil">Perfil</label>
             <select id="eqPerfil">${Object.entries(PERFIS).map(([k,p])=>
