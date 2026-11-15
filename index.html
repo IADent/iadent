@@ -403,6 +403,15 @@ a{color:var(--accent)}
 .ok-msg{font-size:12.5px;line-height:1.5;color:var(--ok);background:var(--ok-soft);
   border:1px solid color-mix(in srgb,var(--ok) 32%,transparent);border-radius:var(--r-sm);padding:10px 11px}
 
+/* ---------- rodapé ---------- */
+.rodape{margin-top:auto;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));
+  display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap;
+  border-top:1px solid var(--line);font-size:11.5px;color:var(--ink-3);
+  text-align:center;line-height:1.5}
+.rodape .sep{opacity:.5}
+.rodape #rodapeHora{font-variant-numeric:tabular-nums;color:var(--ink-2);font-weight:600}
+@media print{.rodape{display:none}}
+
 /* ---------- casca ---------- */
 .app{max-width:440px;margin:0 auto;min-height:100vh;background:var(--ground);
   display:flex;flex-direction:column;border-inline:1px solid var(--line)}
@@ -1221,6 +1230,16 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
     </section>
   </main>
 
+  <!-- Rodapé: a data em que a sessão foi aberta e a hora correndo. Numa
+       clínica isso não é enfeite — o que se registra no prontuário tem
+       hora, e ter o relógio à vista evita o lançamento feito às pressas
+       com a data de ontem, em quem deixa o sistema aberto a noite toda. -->
+  <footer class="rodape">
+    <span id="rodapeData">—</span>
+    <span class="sep">·</span>
+    <span id="rodapeHora" class="mono">--:--:--</span>
+  </footer>
+
   <nav class="tabs">
     <div class="inner">
       <button class="tab" data-scr="hoje" aria-current="page">
@@ -1282,7 +1301,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
 const PERFIS = {
   Administrador:{rotulo:"Administrador", desc:"Acesso total e aprovação de usuários",
     telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
-    atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, admin:true,
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, admin:true,
     custo:true,
     parceiros:true, parceirosEdita:true,
     valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
@@ -1290,7 +1309,7 @@ const PERFIS = {
     precos:true, precoTodos:true, soMinhas:false},
   Dentista:{rotulo:"Dentista", desc:"Atende, edita prontuário e agenda",
     telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
-    atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:true, cadastro:true, admin:false,
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:true, cadastro:true, admin:false,
     custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:true, projecao:true, relatorios:false,
@@ -1326,6 +1345,22 @@ const PERFIS = {
     valores:true, lancaLote:false, caixa:true, projecao:true, relatorios:true,
     lancaPagamento:true,
     precos:true, precoTodos:true, soMinhas:false},
+  /* O assistente trabalha ao lado do dentista, na cadeira: enxerga o
+     prontuário para saber o que está sendo feito e lança o material
+     gasto no procedimento. NÃO registra o atendimento nem anota
+     prontuário — isso é ato do dentista e assim fica na auditoria. Não
+     vê custo de compra, preço, agenda nem financeiro. */
+  Assistente:{rotulo:"Assistente", desc:"Acompanha o atendimento e lança o material usado",
+    telas:["hoje","pacientes","estoque"],
+    atender:false, prontuario:false, verClinico:true, estoque:true, agenda:false,
+    financeiro:false, cadastro:false, admin:false,
+    parceiros:false, parceirosEdita:false,
+    custo:false, valores:false, lancaLote:false, caixa:false, projecao:false, relatorios:false,
+    lancaPagamento:false,
+    /* a permissão que define este perfil: mexe na lista de materiais do
+       atendimento aberto e grava só isso */
+    lancaMaterial:true,
+    precos:false, precoTodos:false, soMinhas:false},
   Estoque:{rotulo:"Estoque", desc:"Entradas, baixas e reposição",
     telas:["estoque"],
     atender:false, prontuario:false, verClinico:false, estoque:true, agenda:false, financeiro:false, cadastro:false, admin:false,
@@ -1356,7 +1391,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v44 · 15/11/2026";
+const VERSAO = "v45 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1366,7 +1401,8 @@ let MODO = "demo";              // "demo" | "nuvem"
 let nuvemTestada = false;
 
 const PERFIL_DB2APP = {administrador:"Administrador", dentista:"Dentista",
-  secretaria:"Secretaria", financeiro:"Financeiro", estoque:"Estoque"};
+  secretaria:"Secretaria", financeiro:"Financeiro", estoque:"Estoque",
+  assistente:"Assistente"};
 const PERFIL_APP2DB = Object.fromEntries(Object.entries(PERFIL_DB2APP).map(([a,b])=>[b,a]));
 const SEXO_DB2APP = {feminino:"Feminino", masculino:"Masculino", outro:"Outro", nao_informado:""};
 const SEXO_APP2DB = {Feminino:"feminino", Masculino:"masculino", Outro:"outro"};
@@ -6303,7 +6339,7 @@ document.addEventListener("keydown", ev=>{
    para material ainda não avisado nesta ficha; material com lote vencido
    volta a avisar mesmo já tendo aparecido. */
 function conferirLotes(){
-  if(!pode("atender")) return;
+  if(!pode("atender") && !pode("lancaMaterial")) return;
   const novos = ficha.mats.filter(m=>!m.avulso).map(m=>m.id)
     .filter(id=>{
       const s=loteSugerido(id);
@@ -6351,7 +6387,11 @@ function ajustaEstoque(antigos, novos, atdId){
   return criticos;
 }
 $("#saveAtend").addEventListener("click", async ()=>{
-  if(!pode("atender")){ toast("Seu perfil não registra atendimento clínico."); return; }
+  /* o assistente grava, mas só o que ele pode mexer: a lista de
+     materiais. Os campos clínicos ficam travados na tela para ele, então
+     o que for gravado aqui é o que já estava lá. */
+  if(!pode("atender") && !pode("lancaMaterial")){
+    toast("Seu perfil não registra atendimento clínico."); return; }
   if(!ficha.paciente.trim()){ toast("Informe o paciente."); $("#inPaciente").focus(); return; }
   if(!ficha.proc.trim()){ toast("Informe o procedimento."); $("#inProc").focus(); return; }
   if(!ficha.cplx){ toast("Selecione a complexidade."); return; }
@@ -6742,7 +6782,9 @@ function editarAtendimento(aid){
 }
 function sairDaEdicao(){
   ficha=fichaVazia(); $("#editBar").hidden=true;
-  $("#saveAtend").textContent = pode("atender") ? "Registrar atendimento" : "Somente o dentista registra atendimento";
+  $("#saveAtend").textContent = pode("atender") ? "Registrar atendimento"
+    : pode("lancaMaterial") ? "Salvar materiais usados"
+    : "Somente o dentista registra atendimento";
   renderFicha();
 }
 $("#cancelEdit").addEventListener("click", ()=>{ sairDaEdicao(); toast("Edição cancelada."); });
@@ -10274,8 +10316,12 @@ function pintarModo(){
       ? "<b>O banco não respondeu</b><br>No plano gratuito o projeto entra em pausa depois de cerca de "+
         "uma semana sem uso. Abra o painel do Supabase e clique em <b>Restore project</b> — "+
         "costuma levar poucos minutos. Nada foi perdido."
-      : "<b>Banco da clínica conectado</b><br>Entre com o e-mail e a senha do seu acesso. "+
-        "Tudo que você registrar fica gravado na nuvem.";
+      /* O texto que dizia "Banco da clínica conectado / tudo fica gravado
+         na nuvem" saiu: numa tela de login em produção, informar que o
+         banco está no ar é ruído — o normal não precisa de aviso. O que
+         merece aviso é a exceção, e essa continua (banco pausado, sem
+         conexão). */
+      : "";
     if(d) d.hidden=true;
   }else{
     if(DB.semRede){
@@ -10324,10 +10370,30 @@ async function pintarClinica(){
   }catch(e){ /* sem rede ou sem permissão: o nome do produto já está lá */ }
 }
 
+/* Um intervalo de um segundo e nada mais: nenhum pedido ao servidor,
+   nenhuma dependência de rede. A data é a do aparelho — a mesma que o
+   sistema usa para datar o que se registra —, então mostrar as duas
+   juntas também serve de conferência silenciosa: relógio errado na
+   recepção aparece aqui antes de estragar um prontuário. */
+let tiqueRodape = null;
+function pintarRodape(){
+  const d = new Date();
+  const dia = $("#rodapeData"), hr = $("#rodapeHora");
+  if(dia) dia.textContent = d.toLocaleDateString("pt-BR",
+    {weekday:"long", day:"2-digit", month:"long", year:"numeric"});
+  if(hr) hr.textContent = d.toLocaleTimeString("pt-BR",
+    {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+}
+function ligarRodape(){
+  pintarRodape();
+  if(tiqueRodape) clearInterval(tiqueRodape);
+  tiqueRodape = setInterval(pintarRodape, 1000);
+}
+
 function entrarNoApp(){
   $("#loginScreen").hidden=true; $("#appRoot").hidden=false;
   aplicarPermissoes(); renderAll(); renderAgente();
-  pintarClinica();
+  pintarClinica(); ligarRodape();
   // a mini agenda da lateral precisa dos compromissos de hoje já no
   // primeiro segundo; sem isso o atalho abre vazio e parece quebrado
   carregarAgenda();
@@ -10438,8 +10504,20 @@ function aplicarPermissoes(){
   if(primeira) primeira.click();
   const bnp = $("#novoPacBtn"); if(bnp) bnp.hidden = !P.cadastro;
   const bnc = $("#novaConsultaBtn"); if(bnc) bnc.hidden = !P.atender;
-  $("#saveAtend").disabled=!P.atender;
-  $("#saveAtend").textContent = P.atender ? "Registrar atendimento" : "Somente o dentista registra atendimento";
+  const gravaFicha = P.atender || P.lancaMaterial;
+  $("#saveAtend").disabled = !gravaFicha;
+  $("#saveAtend").textContent = P.atender ? "Registrar atendimento"
+    : P.lancaMaterial ? "Salvar materiais usados"
+    : "Somente o dentista registra atendimento";
+  /* Para quem só lança material, os campos clínicos ficam somente leitura.
+     Não basta não salvar: deixar editável o que não se pode gravar é
+     convite a digitar e perder o trabalho — e, pior, a achar que anotou. */
+  const soMaterial = !P.atender && P.lancaMaterial;
+  ["inPaciente","inProc","inRegiao","inObs","inDur"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el){ el.readOnly = soMaterial; el.classList.toggle("travado", soMaterial); }
+  });
+  $$("[data-cplx]").forEach(b=>{ b.disabled = soMaterial; });
 
   $("#micBtn").disabled=!P.atender;
   document.querySelector(".voice").style.display = P.atender ? "" : "none";
@@ -12199,7 +12277,7 @@ window.MD = {
   DB, get pausado(){ return DB.pausado; }, VERSAO,
   /* a identidade da clínica no alto da tela vem do banco: o teste precisa
      alcançar a função para provar que nenhum nome está preso no código */
-  pintarClinica,
+  pintarClinica, ligarRodape, pintarRodape,
   get usuario(){ return usuario; },
   get modo(){ return MODO; },
   projetar, taxaPara, resumoPaciente, fluxoPorMes, abrirPaciente, numBR, hojeISO, cent,
