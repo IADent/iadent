@@ -403,6 +403,13 @@ a{color:var(--accent)}
 .ok-msg{font-size:12.5px;line-height:1.5;color:var(--ok);background:var(--ok-soft);
   border:1px solid color-mix(in srgb,var(--ok) 32%,transparent);border-radius:var(--r-sm);padding:10px 11px}
 
+/* ---------- data e hora na tela de login ---------- */
+.rodape-login{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap;
+  font-size:11.5px;color:var(--ink-3);text-align:center;line-height:1.5}
+.rodape-login .sep{opacity:.5}
+.rodape-login #loginHora{font-variant-numeric:tabular-nums;color:var(--ink-2);font-weight:600}
+
 /* ---------- rodapé ---------- */
 .rodape{margin-top:auto;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));
   display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap;
@@ -965,8 +972,16 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <button class="btn primary wide" id="entrarBtn">Entrar</button>
         <div class="hint-demo" id="modoHint">Verificando conexão com o banco…</div>
         <div class="hint-demo" id="demoHint"></div>
-        <div style="margin-top:10px;font-size:11px;color:var(--ink-3);text-align:center"
-          id="versaoLogin">—</div>
+        <!-- Era a versão do sistema. Número de versão é informação de quem
+             desenvolve, não de quem atende: para o dentista diante da tela
+             não quer dizer nada, e ocupa o único lugar da tela onde a data
+             e a hora são úteis. A versão continua em MD.VERSAO para
+             diagnóstico. -->
+        <div class="rodape-login">
+          <span id="loginData">—</span>
+          <span class="sep">·</span>
+          <span id="loginHora" class="mono">--:--:--</span>
+        </div>
       </div>
 
       <div class="painel" id="pn-recuperar">
@@ -1391,7 +1406,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v45 · 15/11/2026";
+const VERSAO = "v46 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -10341,11 +10356,14 @@ function pintarModo(){
       "Se persistir, o projeto pode estar pausado no Supabase.";
     if(d) d.hidden=true;
   }
+  /* o aviso tem borda em cima: vazio, ele não some sozinho — desenha um
+     risco solto no meio da tela. Esconder quando não há o que dizer. */
+  if(h) h.hidden = !h.innerHTML.trim();
+
   const sel=$("#modoBadge");
   if(sel){ sel.textContent = MODO==="nuvem" ? "nuvem" : "demo";
     sel.className = "pill "+(MODO==="nuvem"?"ok":"warn"); }
   const vs=$("#versaoSel"); if(vs) vs.textContent = VERSAO;
-  const vl=$("#versaoLogin"); if(vl) vl.textContent = "IADent " + VERSAO;
 }
 $("#demoHint").innerHTML = "<b>Acessos de demonstração</b><br>"+
   USUARIOS_SEED.map(u=>`${u.email} · senha <b>${u.senha}</b> — ${PERFIS[u.perfil].rotulo}`).join("<br>");
@@ -10378,11 +10396,15 @@ async function pintarClinica(){
 let tiqueRodape = null;
 function pintarRodape(){
   const d = new Date();
-  const dia = $("#rodapeData"), hr = $("#rodapeHora");
-  if(dia) dia.textContent = d.toLocaleDateString("pt-BR",
+  const data = d.toLocaleDateString("pt-BR",
     {weekday:"long", day:"2-digit", month:"long", year:"numeric"});
-  if(hr) hr.textContent = d.toLocaleTimeString("pt-BR",
+  const hora = d.toLocaleTimeString("pt-BR",
     {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+  /* os dois lugares: a tela de login e o rodapé de dentro do sistema */
+  [["#rodapeData", data], ["#rodapeHora", hora],
+   ["#loginData", data], ["#loginHora", hora]].forEach(([sel, txt])=>{
+    const el = document.querySelector(sel); if(el) el.textContent = txt;
+  });
 }
 function ligarRodape(){
   pintarRodape();
@@ -12315,6 +12337,9 @@ $("#todayChip").textContent=hoje.toLocaleDateString("pt-BR",{day:"2-digit",month
    retomar a sessão. Enquanto não souber, não mostra credencial de demo
    nem promete nuvem. */
 (async function abrir(){
+  /* o relógio começa antes de qualquer coisa: a tela de login é a
+     primeira que aparece, e é onde a data já precisa estar certa */
+  ligarRodape();
   await DB.alcancavel();
   pintarModo();
   if(MODO==="nuvem"){
