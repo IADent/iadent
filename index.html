@@ -403,6 +403,22 @@ a{color:var(--accent)}
 .ok-msg{font-size:12.5px;line-height:1.5;color:var(--ok);background:var(--ok-soft);
   border:1px solid color-mix(in srgb,var(--ok) 32%,transparent);border-radius:var(--r-sm);padding:10px 11px}
 
+/* A definição de senha acontece POR CIMA da tela de login, que já está
+   em z-index 100. Sem isto o popup é desenhado mas fica atrás: aparece
+   na tela e não aceita clique — o pior tipo de defeito, porque parece
+   que o sistema travou. */
+#senhaModal{z-index:110}
+
+/* ---------- regras da senha ---------- */
+.regras-senha{list-style:none;margin:2px 0 4px;padding:0;display:flex;flex-direction:column;gap:4px}
+.regras-senha li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3)}
+.regras-senha li i{width:14px;height:14px;flex:none;border-radius:50%;border:1.5px solid var(--line-2);
+  position:relative;transition:background .15s,border-color .15s}
+.regras-senha li.ok{color:var(--ok)}
+.regras-senha li.ok i{background:var(--ok);border-color:var(--ok)}
+.regras-senha li.ok i::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+
 /* ---------- data e hora na tela de login ---------- */
 .rodape-login{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);
   display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap;
@@ -1281,6 +1297,47 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
     </div>
   </nav>
 </div>
+<!-- Definir senha: aparece quando a pessoa chega por um link de convite
+     ou de recuperação. O token vem no endereço e é apagado da barra no
+     instante em que a página abre — link de convite é credencial viva, e
+     deixá-lo no histórico do navegador é o mesmo que deixar a senha
+     anotada no monitor. -->
+<div class="modal-fundo" id="senhaModal" hidden>
+  <div class="modal-caixa">
+    <h2 id="senhaTitulo">Criar sua senha</h2>
+    <p class="sub" id="senhaSub">Escolha uma senha para <b id="senhaEmail">sua conta</b>.</p>
+
+    <div class="field"><label for="inSenha1">Nova senha</label>
+      <div class="comolho">
+        <input id="inSenha1" type="password" autocomplete="new-password" placeholder="sua nova senha">
+        <button type="button" class="olho" data-olho="inSenha1" aria-pressed="false"
+          aria-label="Mostrar senha" title="Mostrar senha">
+          <svg class="aberto" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"></path>
+            <circle cx="12" cy="12" r="2.8"></circle></svg>
+          <svg class="riscado" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 12s3.2-6.5 8-6.5c1.2 0 2.3.2 3.3.7M20 12s-1 2-2.9 3.7"></path>
+            <path d="M9.5 9.6a3 3 0 1 0 4.3 4.2"></path><path d="M3.5 3.5l17 17"></path></svg>
+        </button>
+      </div></div>
+
+    <ul class="regras-senha" id="regrasSenha">
+      <li data-r="tam"><i></i>pelo menos 10 caracteres</li>
+      <li data-r="min"><i></i>uma letra minúscula</li>
+      <li data-r="mai"><i></i>uma letra maiúscula</li>
+      <li data-r="num"><i></i>um número</li>
+      <li data-r="esp"><i></i>um caractere especial (!@#$%&amp;*…)</li>
+    </ul>
+
+    <div class="field"><label for="inSenha2">Repita a senha</label>
+      <input id="inSenha2" type="password" autocomplete="new-password" placeholder="digite de novo"></div>
+    <div id="senhaMsg"></div>
+    <button class="btn primary wide" id="senhaBtn" disabled>Salvar senha</button>
+  </div>
+</div>
+
 <div class="modal-fundo" id="exameModal" hidden>
   <div class="modal-caixa" style="max-width:680px" role="dialog" aria-modal="true" aria-labelledby="exameModalTit">
     <div style="display:flex;align-items:center;gap:10px">
@@ -1406,7 +1463,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v46 · 15/11/2026";
+const VERSAO = "v48 · 15/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -10471,9 +10528,16 @@ $("#recBtn").addEventListener("click", async ()=>{
   if(MODO==="nuvem"){
     // dispara de verdade; o Supabase é que decide se existe conta
     try{
+      /* redirect_to explícito: sem ele o Supabase manda o link para o
+         "Site URL" do projeto, que continua apontando para onde o sistema
+         morava antes. Resultado: o e-mail chega, a pessoa clica e cai no
+         endereço velho — ou em lugar nenhum. Mandando daqui, o link volta
+         para a página de onde o pedido saiu. O Supabase só aceita o
+         destino se ele estiver na lista de Redirect URLs do projeto, então
+         isto aqui e a configuração lá precisam combinar. */
       await fetch(BACKEND.url+"/auth/v1/recover",
         {method:"POST", headers:{apikey:BACKEND.key,"Content-Type":"application/json"},
-         body:JSON.stringify({email:em})});
+         body:JSON.stringify({email:em, redirect_to: location.origin + location.pathname})});
     }catch(e){}
   }
   // Resposta deliberadamente igual exista ou não a conta: dizer "e-mail não
@@ -12336,13 +12400,144 @@ $("#todayChip").textContent=hoje.toLocaleDateString("pt-BR",{day:"2-digit",month
 /* Abertura: primeiro descobre se há banco alcançável, depois tenta
    retomar a sessão. Enquanto não souber, não mostra credencial de demo
    nem promete nuvem. */
+/* ===================== convite e recuperação de senha =====================
+   O Supabase devolve a pessoa para cá com os tokens no FRAGMENTO do
+   endereço (#access_token=...). Três cuidados aqui:
+
+   1. Ler e APAGAR o fragmento imediatamente. Esse pedaço é credencial
+      viva: fica na barra, no histórico, e é copiado junto quando alguém
+      manda "o link não funcionou" para outra pessoa.
+   2. Nunca registrar o token em log nem em mensagem de erro.
+   3. Exigir senha forte de verdade. Quem chega por convite está criando
+      a credencial que abre prontuário — é o pior lugar para aceitar
+      "123456".                                                        */
+const REGRAS_SENHA = [
+  ["tam", s => s.length >= 10],
+  ["min", s => /[a-zà-ÿ]/.test(s)],
+  ["mai", s => /[A-ZÀ-Ý]/.test(s)],
+  ["num", s => /[0-9]/.test(s)],
+  ["esp", s => /[^A-Za-zÀ-ÿ0-9]/.test(s)],
+];
+let tokenSenha = null;
+
+function senhaValida(v){ return REGRAS_SENHA.every(([,f]) => f(v)); }
+
+function pintarRegrasSenha(){
+  const v = $("#inSenha1").value;
+  REGRAS_SENHA.forEach(([k,f])=>{
+    const li = document.querySelector('.regras-senha li[data-r="'+k+'"]');
+    if(li) li.classList.toggle("ok", f(v));
+  });
+  const v2 = $("#inSenha2").value;
+  $("#senhaBtn").disabled = !(senhaValida(v) && v === v2);
+}
+
+/* o e-mail sai do próprio token, só para a pessoa confirmar que está
+   definindo a senha da conta certa; não é usado para autenticar nada */
+function emailDoToken(tok){
+  try{
+    const p = JSON.parse(atob(tok.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")));
+    return p.email || "";
+  }catch(e){ return ""; }
+}
+
+function abrirDefinicaoDeSenha(tok, tipo){
+  tokenSenha = tok;
+  const em = emailDoToken(tok);
+  $("#senhaTitulo").textContent = tipo === "recovery" ? "Redefinir sua senha" : "Criar sua senha";
+  $("#senhaSub").innerHTML = tipo === "recovery"
+    ? "Escolha uma senha nova para <b>" + (em || "sua conta") + "</b>."
+    : "Escolha a senha de acesso de <b>" + (em || "sua conta") + "</b>.";
+  $("#senhaModal").hidden = false;
+  pintarRegrasSenha();
+  setTimeout(()=>$("#inSenha1").focus(), 50);
+}
+
+function lerConviteDaURL(){
+  const h = (location.hash || "").replace(/^#/, "");
+  if(!h) return false;
+  const q = new URLSearchParams(h);
+  const erro = q.get("error_description") || q.get("error");
+  const tok  = q.get("access_token");
+  const tipo = q.get("type");
+  /* apaga o fragmento ANTES de qualquer outra coisa */
+  if(tok || erro) history.replaceState(null, "", location.pathname + location.search);
+  if(erro){
+    /* guardado para ser escrito DEPOIS do pintarModo, que repinta esse
+       mesmo lugar na abertura e apagaria o aviso */
+    return "expirado";
+  }
+  if(tok && (tipo === "invite" || tipo === "recovery" || tipo === "signup")){
+    abrirDefinicaoDeSenha(tok, tipo);
+    return "senha";
+  }
+  return "";
+}
+
+async function salvarNovaSenha(){
+  const v = $("#inSenha1").value, v2 = $("#inSenha2").value;
+  const msg = $("#senhaMsg");
+  if(!senhaValida(v)){ msg.innerHTML = '<div class="aviso">A senha ainda não atende às regras acima.</div>'; return; }
+  if(v !== v2){ msg.innerHTML = '<div class="aviso">As duas senhas não são iguais.</div>'; return; }
+  const b = $("#senhaBtn"); b.disabled = true; b.textContent = "Salvando…";
+  try{
+    const r = await fetch(BACKEND.url + "/auth/v1/user", {
+      method:"PUT",
+      headers:{apikey:BACKEND.key, Authorization:"Bearer "+tokenSenha,
+               "Content-Type":"application/json"},
+      body: JSON.stringify({password: v})
+    });
+    const txt = await r.text();
+    let d = {}; try{ d = txt ? JSON.parse(txt) : {}; }catch(e){ d = null; }
+    if(!r.ok){
+      const motivo = (d && (d.msg || d.error_description || d.message)) || ("erro " + r.status);
+      msg.innerHTML = '<div class="aviso"><b>Não foi possível salvar.</b><br>' +
+        (r.status === 401 || r.status === 403
+          ? "O link expirou. Peça um convite novo ao administrador."
+          : motivo) + "</div>";
+      b.disabled = false; b.textContent = "Salvar senha"; return;
+    }
+    const em = emailDoToken(tokenSenha);
+    tokenSenha = null;
+    $("#inSenha1").value = ""; $("#inSenha2").value = "";
+    $("#senhaModal").hidden = true;
+    if(em) $("#inUser").value = em;
+    const m = $("#modoHint");
+    if(m){ m.hidden=false;
+      m.innerHTML = "<b>Senha criada</b><br>Entre agora com a senha que você acabou de definir."; }
+    setTimeout(()=>$("#inSenha").focus(), 60);
+  }catch(e){
+    msg.innerHTML = '<div class="aviso">Falha de rede ao salvar a senha. Tente de novo.</div>';
+    b.disabled = false; b.textContent = "Salvar senha";
+  }
+}
+
+$("#inSenha1").addEventListener("input", pintarRegrasSenha);
+$("#inSenha2").addEventListener("input", pintarRegrasSenha);
+$("#senhaBtn").addEventListener("click", salvarNovaSenha);
+$("#inSenha2").addEventListener("keydown", e=>{
+  if(e.key === "Enter" && !$("#senhaBtn").disabled) salvarNovaSenha();
+});
+
 (async function abrir(){
   /* o relógio começa antes de qualquer coisa: a tela de login é a
      primeira que aparece, e é onde a data já precisa estar certa */
   ligarRodape();
+  const veioDeLink = lerConviteDaURL();
   await DB.alcancavel();
   pintarModo();
+  if(veioDeLink === "expirado"){
+    const m = $("#modoHint");
+    if(m){ m.hidden = false;
+      m.innerHTML = "<b>Este link não vale mais</b><br>Links de convite e de recuperação " +
+        "expiram e só podem ser usados uma vez. Peça um novo ao administrador, ou use " +
+        "a aba Recuperar aqui mesmo."; }
+  }
+  /* quem chegou para definir senha não deve ser jogado para dentro do
+     sistema por uma sessão antiga guardada neste navegador: o popup
+     ficaria escondido atrás do aplicativo */
   if(MODO==="nuvem"){
+    if(veioDeLink === "senha"){ renderAll(); return; }
     if(DB.lerSessao()){
       try{
         usuario = await DB.quemSou();
