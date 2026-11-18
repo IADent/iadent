@@ -1274,6 +1274,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <button role="tab" aria-selected="true"  data-fin="painel">Painel</button>
         <button role="tab" aria-selected="false" data-fin="fluxo">Fluxo de caixa</button>
         <button role="tab" aria-selected="false" data-fin="recebidos">Recebimentos</button>
+        <button role="tab" aria-selected="false" data-fin="despesas">Despesas</button>
         <button role="tab" aria-selected="false" data-fin="producao">Produção</button>
         <button role="tab" aria-selected="false" data-fin="precos">Preços</button>
         <button role="tab" aria-selected="false" data-fin="taxas">Taxas da maquininha</button>
@@ -1539,7 +1540,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v59 · 18/11/2026";
+const VERSAO = "v60 · 18/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2094,6 +2095,28 @@ const DB = {
         "titular_nome,titular_doc,dono_id,banco_numero,banco_nome,agencia,conta,conta_tipo,"+
         "pix_tipo,pix_chave,ativa,padrao,observacao&order=apelido");
     }catch(e){ S.contasFull = null; }
+
+    /* DESPESAS. Sem elas o fluxo de caixa era só metade: vw_fluxo_caixa
+       deriva de parcelas_recebimento, e parcela é entrada. Um
+       consultório que fatura 40 mil e gasta 38 aparecia como um
+       consultório que fatura 40 mil. */
+    S.despesas = null; S.catDespesa = null; S.despFixas = null; S.fluxoMes = null;
+    try{
+      const [dsp, cat, fix, fm] = await Promise.all([
+        DB.rest("GET","vw_despesas?select=id,descricao,fornecedor,valor,competencia,"+
+          "vencimento,pago_em,paga,atrasada,forma,conta_id,conta,categoria_id,categoria,"+
+          "tipo,grupo,parceiro_id,parceiro,dentista_id,dentista,sala_id,sala,fixa_id,"+
+          "recorrente,nota_fiscal,nota_numero,observacao&order=competencia.desc,vencimento"),
+        DB.rest("GET","categorias_despesa?select=id,nome,tipo,grupo,ativa,ordem&order=ordem,nome"),
+        DB.rest("GET","despesas_fixas?select=id,categoria_id,descricao,fornecedor,parceiro_id,"+
+          "valor_previsto,dia_vencimento,sala_id,dentista_id,inicio,fim,ativa,observacao"+
+          "&order=descricao"),
+        DB.rest("GET","vw_fluxo_mes?select=mes,entradas,entradas_recebidas,entradas_previstas,"+
+          "taxas,saidas,saidas_pagas,saidas_previstas,saidas_fixas,saidas_variaveis,"+
+          "saldo,saldo_realizado,n_entradas,n_saidas,atrasados&order=mes")
+      ]);
+      S.despesas = dsp; S.catDespesa = cat; S.despFixas = fix; S.fluxoMes = fm;
+    }catch(e){ /* sem a atualização de despesas no banco, a tela diz isso */ }
 
     /* contas de recebimento: SÓ o apelido vem por aqui. Banco, agência,
        conta e chave PIX ficam na tabela, atrás da RLS, e nem chegam ao
@@ -9981,6 +10004,481 @@ function destinoDoPagamento(pagId){
 }
 
 /* =====================================================================
+   DESPESAS — O OUTRO LADO DO CAIXA
+
+   "No financeiro temos que incluir no fluxo de despesas, as despesas
+   fixas e variaveis do escritorio para que consigamos ter um controle
+   do fluxo de caixa. isso nao estava sendo considerado."
+
+   Estava faltando metade. O fluxo derivava de parcelas_recebimento, e
+   parcela é entrada: faturamento, não caixa.
+
+   Três telas, porque são três coisas:
+     · LANÇAMENTOS — a despesa que existiu, com competência, vencimento
+       e data de pagamento separados;
+     · FIXAS — o contrato (aluguel 4.200 todo dia 10). Não é lançamento,
+       é o molde de onde o lançamento do mês sai, com um clique;
+     · CATEGORIAS — o catálogo, já semeado. Fixa × variável não é
+       enfeite: é o que separa "quanto custa manter a porta aberta" do
+       que custa atender mais.
+   ===================================================================== */
+let despAba = "lancamentos";
+let despForm = null;      // despesa em edição
+let fixaForm = null;      // despesa fixa em edição
+let despMes = null;       // competência filtrada; null = todas
+let catForm = null;
+
+const GRUPO_DESP = {ocupacao:"Ocupação", servicos:"Serviços", consumo:"Consumo",
+  manutencao:"Manutenção", pessoal:"Pessoal", administrativo:"Administrativo",
+  tributos:"Tributos", financeiro:"Financeiro", outros:"Outros", receita:"Receita"};
+
+const mesAtualISO = () => hojeISO().slice(0,7)+"-01";
+
+const catDespAtivas = () => (S.catDespesa||[]).filter(c=>c.ativa !== false);
+const catDespPor = id => (S.catDespesa||[]).find(c=>c.id===id) || null;
+
+function despesasFiltradas(){
+  const d = S.despesas || [];
+  return despMes ? d.filter(x=>String(x.competencia||"").slice(0,7)===despMes.slice(0,7)) : d;
+}
+
+function somaDespesas(lista){
+  const s = {total:0, pago:0, aberto:0, atrasado:0, fixa:0, variavel:0, n:lista.length};
+  lista.forEach(x=>{
+    const v = Number(x.valor||0);
+    s.total += v;
+    if(x.paga) s.pago += v; else { s.aberto += v; if(x.atrasada) s.atrasado += v; }
+    if(x.tipo==="fixa") s.fixa += v; else s.variavel += v;
+  });
+  ["total","pago","aberto","atrasado","fixa","variavel"].forEach(k=>s[k]=cent(s[k]));
+  return s;
+}
+
+function htmlSelectCategoria(id, atual){
+  const porGrupo = {};
+  catDespAtivas().forEach(c=>{ (porGrupo[c.grupo] = porGrupo[c.grupo] || []).push(c); });
+  return '<select id="'+id+'"><option value="">— escolha a categoria —</option>'
+    + Object.keys(porGrupo).map(g=>'<optgroup label="'+(GRUPO_DESP[g]||g)+'">'
+        + porGrupo[g].map(c=>'<option value="'+c.id+'"'+(atual===c.id?" selected":"")+'>'
+            + esc(c.nome) + ' · ' + (c.tipo==="fixa"?"fixa":"variável") + '</option>').join("")
+        + '</optgroup>').join("")
+    + '</select>';
+}
+
+function htmlDespesas(){
+  if(S.despesas === null){
+    return '<div class="sec-h"><h2>Despesas</h2></div>'
+      + '<div class="stage">Não consegui ler as despesas. Se a atualização '
+      + '<b>ATUALIZAR-DESPESAS.sql</b> ainda não foi rodada no banco, é isso — as '
+      + 'tabelas <code>despesas</code>, <code>despesas_fixas</code> e '
+      + '<code>categorias_despesa</code> são criadas por ela.</div>';
+  }
+  const abas = [["lancamentos","Lançamentos"],["fixas","Fixas do mês"],["categorias","Categorias"]];
+  const topo = '<div class="sec-h"><h2>Despesas</h2>'
+    + '<span class="hint">tudo que sai do caixa da clínica</span></div>'
+    + '<div class="aba" role="tablist" style="margin-bottom:12px">'
+    + abas.map(([k,r])=>'<button role="tab" aria-selected="'+(k===despAba)+'" '
+        + 'data-desp="'+k+'">'+r+'</button>').join("") + '</div>';
+  if(despAba==="fixas")      return topo + htmlDespFixas();
+  if(despAba==="categorias") return topo + htmlDespCategorias();
+  return topo + htmlDespLancamentos();
+}
+
+function htmlDespLancamentos(){
+  const lista = despesasFiltradas();
+  const s = somaDespesas(lista);
+  const meses = Array.from(new Set((S.despesas||[])
+    .map(x=>String(x.competencia||"").slice(0,7)+"-01").filter(x=>x!=="-01"))).sort().reverse();
+  const d = despForm;
+
+  return '<div class="row" style="margin-bottom:8px">'
+    + '<button class="btn primary" id="dsNova">+ Lançar despesa</button>'
+    + '<select id="dsMes" style="max-width:190px">'
+    + '<option value="">todos os meses</option>'
+    + meses.map(m=>'<option value="'+m+'"'+(despMes===m?" selected":"")+'>'
+        + nomeMes(m)+'</option>').join("") + '</select></div>'
+
+    + (d ? htmlDespForm(d) : "")
+
+    + '<div class="tiles" style="margin-top:10px">'
+    + '<div class="tile"><b>'+fmtBRL(s.total)+'</b><span>total'
+    + (despMes?" em "+nomeMes(despMes):"")+'</span></div>'
+    + '<div class="tile ok"><b>'+fmtBRL(s.pago)+'</b><span>já pago</span></div>'
+    + '<div class="tile warn"><b>'+fmtBRL(s.aberto)+'</b><span>a pagar</span></div>'
+    + (s.atrasado>0 ? '<div class="tile crit"><b>'+fmtBRL(s.atrasado)+'</b><span>vencido</span></div>' : "")
+    + '<div class="tile"><b>'+fmtBRL(s.fixa)+'</b><span>fixas</span></div>'
+    + '<div class="tile"><b>'+fmtBRL(s.variavel)+'</b><span>variáveis</span></div>'
+    + '</div>'
+    + '<div class="stage" style="margin-top:8px">A compra de material odontológico '
+    + '<b>não</b> é lançada aqui: ela já entra no caixa pela nota fiscal do estoque, e '
+    + 'lançar de novo contaria duas vezes. A taxa de maquininha também não — ela já sai '
+    + 'do bruto no recebimento.</div>'
+    + '<div class="rowbtns" style="margin-top:8px">'
+    + '<button class="minibtn" id="dsCsv">Baixar CSV</button>'
+    + '<button class="minibtn" id="dsImp">Imprimir</button></div>'
+
+    + (lista.length ? htmlDespTabela(lista)
+        : '<div class="empty" style="margin-top:10px">Nenhuma despesa lançada'
+          + (despMes?" em "+nomeMes(despMes):"")+'.</div>');
+}
+
+function htmlDespTabela(lista){
+  const porGrupo = {};
+  lista.forEach(x=>{ (porGrupo[x.grupo] = porGrupo[x.grupo] || []).push(x); });
+  const ordem = Object.keys(porGrupo).sort((a,b)=>
+    (GRUPO_DESP[a]||a).localeCompare(GRUPO_DESP[b]||b));
+  return ordem.map(g=>{
+    const itens = porGrupo[g].slice().sort((a,b)=>
+      String(b.vencimento||b.competencia||"").localeCompare(String(a.vencimento||a.competencia||"")));
+    const soma = cent(itens.reduce((a,x)=>a+Number(x.valor||0),0));
+    return '<div class="sec-h" style="margin-top:14px"><h2>'+(GRUPO_DESP[g]||g)+'</h2>'
+      + '<span class="hint">'+fmtBRL(soma)+'</span></div>'
+      + '<div class="rolar"><table class="tab-rel"><thead><tr>'
+      + '<th>Despesa</th><th>Categoria</th><th>Competência</th><th>Vencimento</th>'
+      + '<th class="n">Valor</th><th>Situação</th><th></th></tr></thead><tbody>'
+      + itens.map(x=>'<tr>'
+          + '<td><b>'+esc(x.descricao)+'</b>'
+          + (x.fornecedor||x.parceiro ? '<br><small style="color:var(--ink-3)">'
+              + esc(x.parceiro||x.fornecedor)+'</small>' : "")
+          + (x.recorrente ? ' <span class="pill neutral">fixa do mês</span>' : "")
+          + '</td>'
+          + '<td>'+esc(x.categoria)+'<br><small style="color:var(--ink-3)">'
+          + (x.tipo==="fixa"?"fixa":"variável")+'</small></td>'
+          + '<td>'+nomeMes(x.competencia)+'</td>'
+          + '<td>'+(x.vencimento?fmtData(x.vencimento):"—")+'</td>'
+          + '<td class="n"><b>'+fmtBRL(x.valor)+'</b></td>'
+          + '<td><span class="pill '+(x.paga?"ok":x.atrasada?"crit":"neutral")+'">'
+          + (x.paga?("paga "+fmtData(x.pago_em)):x.atrasada?"vencida":"a vencer")+'</span>'
+          + (x.conta?'<br><small style="color:var(--ink-3)">'+esc(x.conta)+'</small>':"")+'</td>'
+          + '<td class="naoimprime">'
+          + (x.paga ? "" : '<button class="minibtn" data-dspagar="'+x.id+'">✓ pagar</button>')
+          + '<button class="minibtn" data-dsedit="'+x.id+'">editar</button></td>'
+          + '</tr>').join("")
+      + '</tbody></table></div>';
+  }).join("");
+}
+
+function htmlDespForm(d){
+  const nova = !d.id;
+  return '<div class="card" style="margin-top:10px">'
+    + '<div class="eyebrow">'+(nova?"Lançar despesa":"Editar despesa")+'</div>'
+    + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">'
+    + '<div class="field"><label for="dsDesc">Descrição</label>'
+    + '<input id="dsDesc" placeholder="Aluguel de novembro · Troca da bomba da cadeira" '
+    + 'value="'+esc(d.descricao||"")+'"></div>'
+    + '<div class="field"><label for="dsCat">Categoria</label>'
+    + htmlSelectCategoria("dsCat", d.categoria_id)+'</div>'
+    + '<div class="grid2">'
+    + '<div class="field"><label for="dsValor">Valor (R$)</label>'
+    + '<input id="dsValor" inputmode="decimal" class="mono" value="'
+    + (d.valor?String(d.valor).replace(".",","):"")+'"></div>'
+    + '<div class="field"><label for="dsComp">Competência — a que mês pertence</label>'
+    + '<input id="dsComp" type="month" value="'
+    + String(d.competencia||mesAtualISO()).slice(0,7)+'"></div></div>'
+    + '<div class="grid2">'
+    + '<div class="field"><label for="dsVenc">Vencimento</label>'
+    + '<input id="dsVenc" type="date" value="'+(d.vencimento||"")+'"></div>'
+    + '<div class="field"><label for="dsPago">Pago em — deixe vazio se ainda não pagou</label>'
+    + '<input id="dsPago" type="date" value="'+(d.pago_em||"")+'"></div></div>'
+    + '<div class="grid2">'
+    + '<div class="field"><label for="dsForma">Forma de pagamento</label><select id="dsForma">'
+    + '<option value="">—</option>'
+    + FORMAS.filter(([v])=>v!=="cortesia"&&v!=="plano_saude")
+        .map(([v,r])=>'<option value="'+v+'"'+(d.forma===v?" selected":"")+'>'+r+'</option>').join("")
+    + '</select></div>'
+    + '<div class="field"><label for="dsConta">De qual conta saiu</label><select id="dsConta">'
+    + '<option value="">— não informado —</option>'
+    + contasAtivas().map(ct=>'<option value="'+ct.id+'"'+(d.conta_id===ct.id?" selected":"")+'>'
+        + esc(ct.apelido)+'</option>').join("") + '</select></div></div>'
+    + '<div class="field"><label for="dsForn">Fornecedor ou prestador</label>'
+    + '<input id="dsForn" value="'+esc(d.fornecedor||"")+'" '
+    + 'placeholder="quem recebeu — opcional"></div>'
+    + '<div class="grid2">'
+    + '<div class="field"><label for="dsSala">Sala — se a despesa é de uma sala só</label>'
+    + '<select id="dsSala"><option value="">— da clínica —</option>'
+    + (agenda.salas||[]).map(x=>'<option value="'+x.id+'"'+(d.sala_id===x.id?" selected":"")+'>'
+        + esc(x.nome)+'</option>').join("") + '</select></div>'
+    + '<div class="field"><label for="dsDent">Dentista — se é rateada para um só</label>'
+    + '<select id="dsDent"><option value="">— da clínica —</option>'
+    + (S.usuarios||[]).filter(u=>u.perfil==="Dentista"||u.perfil==="Administrador")
+        .map(u=>'<option value="'+u.id+'"'+(d.dentista_id===u.id?" selected":"")+'>'
+          + esc(u.nome)+'</option>').join("") + '</select></div></div>'
+    + '<div class="grid2">'
+    + '<div class="field"><label for="dsNF">Nota fiscal</label><select id="dsNF">'
+    + '<option value="nao"'+(d.nota_fiscal?"":" selected")+'>Sem nota</option>'
+    + '<option value="sim"'+(d.nota_fiscal?" selected":"")+'>Com nota</option></select></div>'
+    + '<div class="field"><label for="dsNFNum">Número da nota</label>'
+    + '<input id="dsNFNum" class="mono" value="'+esc(d.nota_numero||"")+'" '
+    + 'placeholder="opcional"></div></div>'
+    + '<div class="field"><label for="dsObs">Observação</label>'
+    + '<input id="dsObs" value="'+esc(d.observacao||"")+'"></div>'
+    + '<div class="row"><button class="btn primary" style="flex:1" id="dsSalvar">'
+    + 'Salvar despesa</button>'
+    + '<button class="btn" id="dsCancelar">Cancelar</button></div>'
+    + '<div class="stage">Competência e pagamento são datas diferentes de propósito: a '
+    + 'energia de março chega em abril e é custo de março. O relatório por competência '
+    + 'mostra o custo do mês; o fluxo de caixa mostra quando o dinheiro sai.</div>'
+    + '</div></div>';
+}
+
+function htmlDespFixas(){
+  const fx = S.despFixas || [];
+  const ativas = fx.filter(x=>x.ativa!==false);
+  const mensal = cent(ativas.reduce((a,x)=>a+Number(x.valor_previsto||0),0));
+  const mes = mesAtualISO();
+  const jaLancadas = (S.despesas||[]).filter(x=>x.fixa_id
+    && String(x.competencia||"").slice(0,7)===mes.slice(0,7)).length;
+  const f = fixaForm;
+
+  return '<div class="tiles">'
+    + '<div class="tile"><b>'+fmtBRL(mensal)+'</b><span>custo fixo mensal</span></div>'
+    + '<div class="tile"><b>'+ativas.length+'</b><span>despesas fixas ativas</span></div>'
+    + '<div class="tile '+(jaLancadas>=ativas.length&&ativas.length?"ok":"warn")+'">'
+    + '<b>'+jaLancadas+'/'+ativas.length+'</b><span>lançadas em '+nomeMes(mes)+'</span></div>'
+    + '</div>'
+    + '<div class="stage" style="margin-top:8px">Isto é o <b>contrato</b>, não o '
+    + 'lançamento: aluguel de 4.200 todo dia 10 fica aqui uma vez e vira despesa do mês '
+    + 'com um clique. Clicar duas vezes não dobra nada — o banco recusa a segunda.</div>'
+    + '<div class="row" style="margin-top:10px">'
+    + '<button class="btn primary" id="fxNova">+ Nova despesa fixa</button>'
+    + (ativas.length ? '<button class="btn" id="fxLancar">Lançar as fixas de '
+        + nomeMes(mes)+'</button>' : "") + '</div>'
+
+    + (f ? '<div class="card" style="margin-top:10px">'
+      + '<div class="eyebrow">'+(f.id?"Editar despesa fixa":"Nova despesa fixa")+'</div>'
+      + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">'
+      + '<div class="field"><label for="fxDesc">Descrição</label>'
+      + '<input id="fxDesc" placeholder="Aluguel · Limpeza semanal · Contabilidade" '
+      + 'value="'+esc(f.descricao||"")+'"></div>'
+      + '<div class="field"><label for="fxCat">Categoria</label>'
+      + htmlSelectCategoria("fxCat", f.categoria_id)+'</div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="fxValor">Valor previsto (R$)</label>'
+      + '<input id="fxValor" inputmode="decimal" class="mono" value="'
+      + (f.valor_previsto?String(f.valor_previsto).replace(".",","):"")+'"></div>'
+      + '<div class="field"><label for="fxDia">Dia do vencimento</label>'
+      + '<input id="fxDia" type="number" min="1" max="31" class="mono" value="'
+      + (f.dia_vencimento||"")+'" placeholder="10"></div></div>'
+      + '<div class="field"><label for="fxForn">Fornecedor ou prestador</label>'
+      + '<input id="fxForn" value="'+esc(f.fornecedor||"")+'"></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="fxInicio">Vale a partir de</label>'
+      + '<input id="fxInicio" type="month" value="'
+      + String(f.inicio||mesAtualISO()).slice(0,7)+'"></div>'
+      + '<div class="field"><label for="fxFim">Até — vazio = sem prazo</label>'
+      + '<input id="fxFim" type="month" value="'
+      + (f.fim?String(f.fim).slice(0,7):"")+'"></div></div>'
+      + '<label class="check"><input type="checkbox" id="fxAtiva"'
+      + (f.ativa===false?"":" checked")+'><span>Ativa — entra no lançamento do mês</span></label>'
+      + '<div class="row"><button class="btn primary" style="flex:1" id="fxSalvar">Salvar</button>'
+      + '<button class="btn" id="fxCancelar">Cancelar</button></div>'
+      + '</div></div>' : "")
+
+    + '<div class="list" style="margin-top:10px">'
+    + (fx.length ? fx.filter(x=>!(f && x.id===f.id)).map(x=>{
+        const cat = catDespPor(x.categoria_id);
+        return '<div class="item"><div class="main"><b>'+esc(x.descricao)+'</b>'
+          + '<small>'+fmtBRL(x.valor_previsto)
+          + (x.dia_vencimento ? ' · todo dia '+x.dia_vencimento : "")
+          + (cat ? ' · '+esc(cat.nome) : "")
+          + (x.fornecedor ? ' · '+esc(x.fornecedor) : "") + '</small></div>'
+          + '<div class="end">'
+          + (x.ativa===false?'<span class="pill neutral">inativa</span>':"")
+          + '<button class="minibtn" data-fxedit="'+x.id+'">Editar</button></div></div>';
+      }).join("")
+      : '<div class="empty">Nenhuma despesa fixa cadastrada. Sem elas, o ponto de '
+        + 'equilíbrio da clínica não pode ser calculado.</div>')
+    + '</div>';
+}
+
+function htmlDespCategorias(){
+  const cats = S.catDespesa || [];
+  const porGrupo = {};
+  cats.forEach(c=>{ (porGrupo[c.grupo] = porGrupo[c.grupo] || []).push(c); });
+  return '<div class="stage">Catálogo de partida já carregado pelo SQL. '
+    + '<b>Fixa</b> é o que a clínica paga com a porta fechada; <b>variável</b> é o que '
+    + 'varia com o atendimento. A separação é o que permite calcular o ponto de '
+    + 'equilíbrio e entrar no preço do procedimento.</div>'
+    + '<div class="row" style="margin-top:10px">'
+    + '<button class="btn primary" id="catNova">+ Nova categoria</button></div>'
+    + (catForm ? '<div class="card" style="margin-top:10px">'
+      + '<div class="eyebrow">Nova categoria de despesa</div>'
+      + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">'
+      + '<div class="field"><label for="catNome">Nome</label>'
+      + '<input id="catNome" value="'+esc(catForm.nome||"")+'"></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="catTipo">Tipo</label><select id="catTipo">'
+      + '<option value="fixa"'+(catForm.tipo==="fixa"?" selected":"")+'>Fixa</option>'
+      + '<option value="variavel"'+(catForm.tipo!=="fixa"?" selected":"")+'>Variável</option>'
+      + '</select></div>'
+      + '<div class="field"><label for="catGrupo">Grupo</label><select id="catGrupo">'
+      + Object.entries(GRUPO_DESP).filter(([k])=>k!=="receita")
+          .map(([k,r])=>'<option value="'+k+'"'+(catForm.grupo===k?" selected":"")+'>'
+            +r+'</option>').join("") + '</select></div></div>'
+      + '<div class="row"><button class="btn primary" style="flex:1" id="catSalvar">Salvar</button>'
+      + '<button class="btn" id="catCancelar">Cancelar</button></div>'
+      + '</div></div>' : "")
+    + Object.keys(porGrupo).map(g=>'<div class="sec-h" style="margin-top:14px">'
+        + '<h2>'+(GRUPO_DESP[g]||g)+'</h2><span class="hint">'
+        + porGrupo[g].length+' categoria(s)</span></div>'
+        + '<div class="list">'+porGrupo[g].map(c=>'<div class="item">'
+            + '<div class="main"><b>'+esc(c.nome)+'</b></div><div class="end">'
+            + '<span class="pill '+(c.tipo==="fixa"?"neutral":"warn")+'">'
+            + (c.tipo==="fixa"?"fixa":"variável")+'</span>'
+            + (c.ativa===false?'<span class="pill neutral">inativa</span>':"")
+            + '</div></div>').join("")+'</div>').join("");
+}
+
+function ligarDespesas(){
+  $$("#finPainel [data-desp]").forEach(b=>b.addEventListener("click", ()=>{
+    despAba = b.dataset.desp; despForm=null; fixaForm=null; catForm=null;
+    renderFinanceiro();
+  }));
+
+  const mes=$("#dsMes");
+  if(mes) mes.addEventListener("change", ()=>{ despMes = mes.value||null; renderFinanceiro(); });
+
+  const nova=$("#dsNova");
+  if(nova) nova.addEventListener("click", ()=>{
+    despForm = {competencia: despMes || mesAtualISO()};
+    renderFinanceiro();
+    setTimeout(()=>{ const el=$("#dsDesc"); if(el){ el.focus();
+      el.scrollIntoView({block:"center", behavior:"smooth"}); } }, 60);
+  });
+  const canc=$("#dsCancelar");
+  if(canc) canc.addEventListener("click", ()=>{ despForm=null; renderFinanceiro(); });
+
+  $$("#finPainel [data-dsedit]").forEach(b=>b.addEventListener("click", ()=>{
+    despForm = (S.despesas||[]).find(x=>x.id===b.dataset.dsedit) || null;
+    renderFinanceiro();
+    setTimeout(()=>{ const el=$("#dsDesc"); if(el)
+      el.scrollIntoView({block:"center", behavior:"smooth"}); }, 60);
+  }));
+
+  /* ✓ pagar: um clique marca a data de hoje. É o caso comum, e abrir o
+     formulário inteiro para isso faz ninguém marcar. */
+  $$("#finPainel [data-dspagar]").forEach(b=>b.addEventListener("click", async ()=>{
+    const id = b.dataset.dspagar;
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("PATCH","despesas?id=eq."+id, {pago_em: hojeISO()});
+      await DB.carregarCaixa();
+    }, "pagamento da despesa");
+    if(!ok) return;
+    renderFinanceiro(); toast("Despesa marcada como paga em "+fmtData(hojeISO())+".");
+  }));
+
+  const sv=$("#dsSalvar");
+  if(sv) sv.addEventListener("click", async ()=>{
+    const desc = $("#dsDesc").value.trim();
+    if(!desc){ toast("Descreva a despesa."); $("#dsDesc").focus(); return; }
+    const cat = $("#dsCat").value;
+    if(!cat){ toast("Escolha a categoria — é ela que separa fixa de variável.");
+      $("#dsCat").focus(); return; }
+    const valor = numBR($("#dsValor").value);
+    if(!(valor>0)){ toast("Informe o valor da despesa."); $("#dsValor").focus(); return; }
+    const pago = $("#dsPago").value || null;
+    const forma = $("#dsForma").value || null;
+    if(pago && !forma){ toast("Despesa paga precisa da forma de pagamento.");
+      $("#dsForma").focus(); return; }
+    const corpo = {categoria_id:cat, descricao:desc, valor,
+      competencia: ($("#dsComp").value||mesAtualISO().slice(0,7))+"-01",
+      vencimento: $("#dsVenc").value||null, pago_em: pago,
+      forma, conta_id: $("#dsConta").value||null,
+      fornecedor: $("#dsForn").value.trim()||null,
+      sala_id: $("#dsSala").value||null, dentista_id: $("#dsDent").value||null,
+      nota_fiscal: $("#dsNF").value==="sim",
+      nota_numero: $("#dsNFNum").value.trim()||null,
+      observacao: $("#dsObs").value.trim()||null};
+    const ok = await naNuvem(async ()=>{
+      if(despForm && despForm.id) await DB.rest("PATCH","despesas?id=eq."+despForm.id, corpo);
+      else await DB.rest("POST","despesas",
+        {clinica_id:DB.clinica, criado_por:DB.meuId, ...corpo});
+      await DB.carregarCaixa();
+    }, "despesa");
+    if(!ok) return;
+    despForm = null; renderFinanceiro(); toast("Despesa de "+fmtBRL(valor)+" salva.");
+  });
+
+  /* ---- fixas ---- */
+  const fxn=$("#fxNova");
+  if(fxn) fxn.addEventListener("click", ()=>{ fixaForm = {ativa:true}; renderFinanceiro();
+    setTimeout(()=>{ const el=$("#fxDesc"); if(el){ el.focus();
+      el.scrollIntoView({block:"center", behavior:"smooth"}); } }, 60); });
+  const fxc=$("#fxCancelar");
+  if(fxc) fxc.addEventListener("click", ()=>{ fixaForm=null; renderFinanceiro(); });
+  $$("#finPainel [data-fxedit]").forEach(b=>b.addEventListener("click", ()=>{
+    fixaForm = (S.despFixas||[]).find(x=>x.id===b.dataset.fxedit) || null;
+    renderFinanceiro();
+  }));
+  const fxs=$("#fxSalvar");
+  if(fxs) fxs.addEventListener("click", async ()=>{
+    const desc=$("#fxDesc").value.trim();
+    if(!desc){ toast("Descreva a despesa fixa."); $("#fxDesc").focus(); return; }
+    const cat=$("#fxCat").value;
+    if(!cat){ toast("Escolha a categoria."); $("#fxCat").focus(); return; }
+    const v=numBR($("#fxValor").value);
+    if(!(v>0)){ toast("Informe o valor previsto."); $("#fxValor").focus(); return; }
+    const dia = $("#fxDia").value ? Number($("#fxDia").value) : null;
+    if(dia !== null && (dia<1 || dia>31)){ toast("Dia do vencimento entre 1 e 31."); return; }
+    const corpo = {categoria_id:cat, descricao:desc, valor_previsto:v,
+      dia_vencimento:dia, fornecedor:$("#fxForn").value.trim()||null,
+      inicio: ($("#fxInicio").value||mesAtualISO().slice(0,7))+"-01",
+      fim: $("#fxFim").value ? $("#fxFim").value+"-01" : null,
+      ativa: $("#fxAtiva").checked};
+    const ok = await naNuvem(async ()=>{
+      if(fixaForm && fixaForm.id) await DB.rest("PATCH","despesas_fixas?id=eq."+fixaForm.id, corpo);
+      else await DB.rest("POST","despesas_fixas",
+        {clinica_id:DB.clinica, criado_por:DB.meuId, ...corpo});
+      await DB.carregarCaixa();
+    }, "despesa fixa");
+    if(!ok) return;
+    fixaForm=null; renderFinanceiro(); toast("Despesa fixa salva.");
+  });
+  const fxl=$("#fxLancar");
+  if(fxl) fxl.addEventListener("click", async ()=>{
+    const mes = mesAtualISO();
+    let n = 0;
+    const ok = await naNuvem(async ()=>{
+      n = await DB.rest("POST","rpc/lancar_despesas_fixas", {p_competencia: mes});
+      await DB.carregarCaixa();
+    }, "lançamento das fixas");
+    if(!ok) return;
+    renderFinanceiro();
+    toast(Number(n)>0 ? Number(n)+" despesa(s) fixa(s) lançada(s) em "+nomeMes(mes)+"."
+                      : "Nada a lançar: as fixas de "+nomeMes(mes)+" já estavam lá.");
+  });
+
+  /* ---- categorias ---- */
+  const cn=$("#catNova");
+  if(cn) cn.addEventListener("click", ()=>{ catForm={tipo:"variavel",grupo:"outros"};
+    renderFinanceiro(); });
+  const cc2=$("#catCancelar");
+  if(cc2) cc2.addEventListener("click", ()=>{ catForm=null; renderFinanceiro(); });
+  const cs2=$("#catSalvar");
+  if(cs2) cs2.addEventListener("click", async ()=>{
+    const nome=$("#catNome").value.trim();
+    if(!nome){ toast("Dê um nome à categoria."); return; }
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("POST","categorias_despesa", {clinica_id:DB.clinica, nome,
+        tipo:$("#catTipo").value, grupo:$("#catGrupo").value});
+      await DB.carregarCaixa();
+    }, "categoria de despesa");
+    if(!ok) return;
+    catForm=null; renderFinanceiro(); toast("Categoria \""+nome+"\" criada.");
+  });
+
+  const imp=$("#dsImp"); if(imp) imp.addEventListener("click", ()=>window.print());
+  const csv=$("#dsCsv");
+  if(csv) csv.addEventListener("click", ()=>baixarCSV("despesas",
+    [["Descrição","Categoria","Tipo","Grupo","Fornecedor","Competência","Vencimento",
+      "Pago em","Valor","Forma","Conta","Sala","Dentista","Nota"]].concat(
+      despesasFiltradas().map(x=>[x.descricao, x.categoria, x.tipo, GRUPO_DESP[x.grupo]||x.grupo,
+        x.parceiro||x.fornecedor||"", x.competencia, x.vencimento||"", x.pago_em||"",
+        x.valor, x.forma||"", x.conta||"", x.sala||"", x.dentista||"",
+        x.nota_numero||(x.nota_fiscal?"sim":"")]))));
+}
+
+/* =====================================================================
    PAINEL DO FINANCEIRO
 
    "criar um dashboard profissional da situação financeira e do fluxo de
@@ -10079,6 +10577,88 @@ function tabelaPainel(titulo, grupos, colRot){
     + '</tbody></table></div>';
 }
 
+/* As despesas do mesmo recorte do painel. A data de caixa da despesa é
+   quando ela sai (ou deve sair): pago_em, senão vencimento, senão a
+   competência. Dentista e sala só filtram quando a despesa foi rateada
+   para um deles — aluguel não é de dentista nenhum, e tirá-lo do
+   recorte ao filtrar por dentista seria mostrar lucro que não existe,
+   então despesa da clínica entra em qualquer recorte. */
+function dataCaixaDespesa(x){
+  return String(x.pago_em || x.vencimento || x.competencia || "").slice(0,10);
+}
+function despesasPainel(){
+  if(!painel) painel = painelInicial();
+  return (S.despesas || []).filter(x=>{
+    const d = dataCaixaDespesa(x);
+    if(!d) return false;
+    if(painel.de  && d < painel.de)  return false;
+    if(painel.ate && d > painel.ate) return false;
+    if(painel.dent && x.dentista_id && x.dentista_id !== painel.dent) return false;
+    if(painel.sala && x.sala_id && String(x.sala_id) !== painel.sala) return false;
+    return true;
+  });
+}
+
+function htmlDespesasDoPainel(liquidoEntrada){
+  if(S.despesas === null) return '<div class="stage" style="margin-top:12px">'
+    + '<b>As despesas ainda não entram neste painel.</b> Rode '
+    + '<b>ATUALIZAR-DESPESAS.sql</b> no banco: sem ele o painel mostra só o que '
+    + 'entra, e saldo sem saída não é saldo.</div>';
+  const ds = despesasPainel();
+  const s = somaDespesas(ds);
+  const saldo = cent(liquidoEntrada - s.total);
+  const margem = liquidoEntrada ? (saldo / liquidoEntrada * 100) : null;
+
+  const porCat = {};
+  ds.forEach(x=>{
+    const k = x.categoria_id || x.categoria || "—";
+    if(!porCat[k]) porCat[k] = {rot:x.categoria||"—", grupo:x.grupo, tipo:x.tipo,
+                                total:0, pago:0, aberto:0, n:0};
+    const g = porCat[k];
+    g.total += Number(x.valor||0); g.n++;
+    if(x.paga) g.pago += Number(x.valor||0); else g.aberto += Number(x.valor||0);
+  });
+  const cats = Object.values(porCat).map(g=>{
+    ["total","pago","aberto"].forEach(k=>g[k]=cent(g[k])); return g;
+  }).sort((a,b)=>b.total-a.total);
+
+  return '<div class="sec-h" style="margin-top:16px"><h2>Saídas e saldo</h2>'
+    + '<span class="hint">despesas do mesmo recorte</span></div>'
+    + '<div class="tiles">'
+    + '<div class="tile"><b>'+fmtBRL(s.total)+'</b><span>despesas</span></div>'
+    + '<div class="tile"><b>'+fmtBRL(s.fixa)+'</b><span>fixas</span></div>'
+    + '<div class="tile"><b>'+fmtBRL(s.variavel)+'</b><span>variáveis</span></div>'
+    + '<div class="tile ok"><b>'+fmtBRL(s.pago)+'</b><span>já pagas</span></div>'
+    + '<div class="tile warn"><b>'+fmtBRL(s.aberto)+'</b><span>a pagar</span></div>'
+    + (s.atrasado>0 ? '<div class="tile crit"><b>'+fmtBRL(s.atrasado)
+        +'</b><span>vencidas</span></div>' : "")
+    + '<div class="tile '+(saldo>=0?"ok":"crit")+'"><b>'+fmtBRL(saldo)
+    + '</b><span>saldo do recorte</span></div>'
+    + '</div>'
+    + '<div class="stage" style="margin-top:8px">'
+    + 'Líquido que entra <b>'+fmtBRL(liquidoEntrada)+'</b> menos despesas '
+    + '<b>'+fmtBRL(s.total)+'</b>'
+    + (margem===null?"":' · margem de <b>'+margem.toFixed(1)+'%</b>')
+    + '. A compra de material odontológico não está nesta conta: ela entra pela nota '
+    + 'fiscal do estoque e aparece em <b>Fluxo de caixa</b>, na coluna de saídas.</div>'
+    + (cats.length ? '<div class="sec-h" style="margin-top:14px"><h2>Por categoria de '
+        + 'despesa</h2><span class="hint">maior primeiro</span></div>'
+      + '<div class="rolar"><table class="tab-rel"><thead><tr>'
+      + '<th>Categoria</th><th>Grupo</th><th>Tipo</th><th class="n">Lançamentos</th>'
+      + '<th class="n">Total</th><th class="n">Pago</th><th class="n">A pagar</th>'
+      + '<th class="n">% das saídas</th></tr></thead><tbody>'
+      + cats.map(g=>'<tr><td><b>'+esc(g.rot)+'</b></td>'
+          + '<td>'+(GRUPO_DESP[g.grupo]||g.grupo||"—")+'</td>'
+          + '<td>'+(g.tipo==="fixa"?"fixa":"variável")+'</td>'
+          + '<td class="n">'+g.n+'</td>'
+          + '<td class="n"><b>'+fmtBRL(g.total)+'</b></td>'
+          + '<td class="n">'+fmtBRL(g.pago)+'</td>'
+          + '<td class="n">'+fmtBRL(g.aberto)+'</td>'
+          + '<td class="n">'+(s.total?(g.total/s.total*100).toFixed(1)+"%":"—")
+          + '</td></tr>').join("")
+      + '</tbody></table></div>' : "");
+}
+
 function htmlPainel(){
   if(!painel) painel = painelInicial();
   if(S.analitico === null){
@@ -10159,6 +10739,8 @@ function htmlPainel(){
 
     + (linhas.length ? "" : '<div class="empty" style="margin-top:12px">'
         + 'Nada no período e nos filtros escolhidos.</div>')
+
+    + htmlDespesasDoPainel(s.liquido)
 
     + tabelaPainel("Por mês",
         agruparPainel(linhas, painel.base==="pagamento" ? "pago_em" : "previsao_credito",
@@ -10388,6 +10970,7 @@ function renderFinanceiro(){
   $$("#finAbas button").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.fin===finAba)));
   const podeVer = pode("projecao");
   const verTaxa = pode("projecao") && !pode("soMinhas");   // taxa é da clínica, não do dentista
+  if(finAba==="despesas" && !podeVer) finAba="producao";
   if(finAba==="painel" && !podeVer) finAba="producao";
   if(finAba==="contas" && !podeVer) finAba="producao";
   if(finAba==="fluxo" && !podeVer) finAba="producao";
@@ -10397,6 +10980,9 @@ function renderFinanceiro(){
   const semPreco = (S.faltaSql||[]).some(f=>f.nome.includes("preço"));
   if(finAba==="painel"){
     alvo.innerHTML = htmlPainel(); ligarPainel();
+  }
+  else if(finAba==="despesas"){
+    alvo.innerHTML = htmlDespesas(); ligarDespesas();
   }
   else if(finAba==="contas"){
     contasEm = "financeiro";
@@ -10414,7 +11000,8 @@ function renderFinanceiro(){
   }
   else                      alvo.innerHTML = htmlProducao();
   $$("#finAbas button").forEach(b=>{
-    b.hidden = (b.dataset.fin==="painel" && !podeVer)
+    b.hidden = (b.dataset.fin==="despesas" && !podeVer)
+            || (b.dataset.fin==="painel" && !podeVer)
             || (b.dataset.fin==="contas" && !podeVer)
             || (b.dataset.fin==="fluxo" && !podeVer)
             || (b.dataset.fin==="taxas" && !verTaxa)
@@ -10508,9 +11095,46 @@ function htmlAtrasadas(){
     </div>`;
 }
 
+/* O mês de verdade: entrada E saída. vw_fluxo_mes soma recebimento,
+   despesa lançada e compra de material pela nota fiscal do estoque. */
+const fluxoMesPor = m => (S.fluxoMes||[]).find(f=>String(f.mes).slice(0,7)===String(m).slice(0,7));
+const n0 = v => Number(v||0);
+
+function htmlSaldoDoMes(){
+  const fm = S.fluxoMes;
+  if(!fm) return '<div class="stage" style="margin-top:10px">'
+    + '<b>As despesas ainda não estão no fluxo.</b> Enquanto '
+    + '<b>ATUALIZAR-DESPESAS.sql</b> não for rodado no banco, o que aparece aqui é '
+    + 'só o que ENTRA — faturamento, não caixa. Um consultório que fatura 40 mil e '
+    + 'gasta 38 aparece como um consultório que fatura 40 mil.</div>';
+  if(!fm.length) return "";
+  const hojeMes = hojeISO().slice(0,7)+"-01";
+  const m = fluxoMesPor(hojeMes) || {};
+  const futuros = fm.filter(f=>String(f.mes)>=hojeMes);
+  const saldoPrev = cent(futuros.reduce((a,f)=>a+n0(f.saldo),0));
+  return '<div class="sec-h" style="margin-top:14px"><h2>Caixa de '+nomeMes(hojeMes)+'</h2>'
+    + '<span class="hint">entrou, saiu, sobrou</span></div>'
+    + '<div class="tiles q4">'
+    + '<div class="tile ok"><b>'+fmtBRL(n0(m.entradas_recebidas))+'</b><span>entrou</span></div>'
+    + '<div class="tile crit"><b>'+fmtBRL(n0(m.saidas_pagas))+'</b><span>saiu</span></div>'
+    + '<div class="tile '+(n0(m.saldo_realizado)>=0?"ok":"crit")+'">'
+    + '<b>'+fmtBRL(n0(m.saldo_realizado))+'</b><span>saldo realizado</span></div>'
+    + '<div class="tile '+(n0(m.saldo)>=0?"":"warn")+'">'
+    + '<b>'+fmtBRL(n0(m.saldo))+'</b><span>saldo do mês com o previsto</span></div>'
+    + '</div>'
+    + '<div class="stage" style="margin-top:8px">'
+    + 'Custo fixo de '+nomeMes(hojeMes)+': <b>'+fmtBRL(n0(m.saidas_fixas))+'</b> · '
+    + 'variável: <b>'+fmtBRL(n0(m.saidas_variaveis))+'</b>. '
+    + 'O fixo é o que a clínica paga com a porta fechada — é ele que define quanto '
+    + 'precisa faturar para empatar. '
+    + 'Saldo previsto dos próximos '+futuros.length+' mês(es): <b>'+fmtBRL(saldoPrev)+'</b>.'
+    + '</div>';
+}
+
 function htmlFluxo(){
   const meses = fluxoPorMes();
-  if(!meses.length) return `<div class="empty">Nenhum recebimento lançado ainda.
+  if(!meses.length) return htmlSaldoDoMes()
+    + `<div class="empty" style="margin-top:10px">Nenhum recebimento lançado ainda.
     O fluxo aparece aqui quando o primeiro pagamento for registrado na ficha de um paciente.</div>`;
   const hojeMes = hojeISO().slice(0,7)+"-01";
   const futuros = meses.filter(m=>m.mes>=hojeMes);
@@ -10525,6 +11149,9 @@ function htmlFluxo(){
       <p>Os números abaixo estão incompletos — não leia como caixa vazio. Recarregue a
       página; se continuar, me diga esta mensagem: ${
         S.falhouFluxo.map(f=>f.motivo).join(" · ")}</p></div>` : ""}
+    ${htmlSaldoDoMes()}
+    <div class="sec-h" style="margin-top:14px"><h2>Entradas</h2>
+      <span class="hint">recebimento de paciente</span></div>
     <div class="tiles q4">
       <div class="tile ok"><b>${fmtBRL(esteMes.recebido)}</b><span>total recebido no mês</span></div>
       <div class="tile"><b>${fmtBRL(esteMes.previsto)}</b><span>aguardando pagamento</span></div>
@@ -10554,6 +11181,7 @@ function htmlFluxo(){
     <div class="card rolar"><table class="tab-rel">
       <thead><tr><th>Mês</th><th class="n">Bruto</th><th class="n">Taxas</th>
         <th class="n">Líquido</th><th class="n">Recebido</th><th class="n">Aguardando</th>
+        ${S.fluxoMes?`<th class="n">Saídas</th><th class="n">Saldo</th>`:""}
         <th style="width:90px">&nbsp;</th><th class="n">Parc.</th></tr></thead>
       <tbody>${meses.map(m=>{
         const rec = Math.round(100*m.recebido/Math.max(m.liquido,0.01));
@@ -10564,6 +11192,12 @@ function htmlFluxo(){
           <td class="n"><b>${fmtBRL(m.liquido)}</b></td>
           <td class="n">${m.recebido?fmtBRL(m.recebido):'<span class="vaga">—</span>'}</td>
           <td class="n">${m.previsto?fmtBRL(m.previsto):'<span class="vaga">—</span>'}</td>
+          ${S.fluxoMes?(()=>{ const f=fluxoMesPor(m.mes)||{};
+            const sai=n0(f.saidas), sal=n0(f.saldo);
+            return `<td class="n" style="color:var(--crit)">${
+                sai?"−"+fmtBRL(sai).replace("R$ ",""):'<span class="vaga">—</span>'}</td>
+              <td class="n"><b style="color:${sal<0?"var(--crit)":"var(--ok)"}">${
+                fmtBRL(sal)}</b></td>`; })():""}
           <td><div class="barfx" title="${rec}% já recebido"
             ><i class="rec" style="width:${rec}%"></i><i class="prev" style="width:${100-rec}%"></i></div></td>
           <td class="n">${m.parcelas}</td></tr>`;
@@ -10574,6 +11208,8 @@ function htmlFluxo(){
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.liquido,0))}</td>
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.recebido,0))}</td>
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.previsto,0))}</td>
+        ${S.fluxoMes?`<td class="n">${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saidas),0))}</td>
+        <td class="n"><b>${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saldo),0))}</b></td>`:""}
         <td></td><td class="n">${meses.reduce((a,m)=>a+m.parcelas,0)}</td></tr></tfoot>
     </table></div>
     ${htmlConferenciaPaciente()}
@@ -13401,6 +14037,10 @@ window.MD = {
   get modo(){ return MODO; },
   renderAll, renderHoje, renderCaixa, renderFinanceiro, htmlAgendaDeHoje,
   htmlPainel, htmlContas, htmlQuitar, htmlPlano, htmlPlanoResumo,
+  htmlDespesas, htmlSaldoDoMes, htmlDespesasDoPainel, htmlFluxo,
+  despesasPainel, somaDespesas, fluxoMesPor, despesasFiltradas,
+  get despAba(){ return despAba; }, set despAba(v){ despAba = v; },
+  get despMes(){ return despMes; }, set despMes(v){ despMes = v; },
   fmtCel, fmtCpf, parcelasDoPlano, contasAtivas,
   get painel(){ return painel; }, set painel(v){ painel = v; },
   get finAba(){ return finAba; }, set finAba(v){ finAba = v; },
