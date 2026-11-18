@@ -1543,10 +1543,16 @@ const PERFIS = {
        atendimento aberto e grava só isso */
     lancaMaterial:true,
     precos:false, precoTodos:false, soMinhas:false},
-  Estoque:{rotulo:"Estoque", desc:"Entradas, baixas e reposição",
-    telas:["estoque"],
+  Estoque:{rotulo:"Estoque", desc:"Entradas, baixas, reposição e pedidos",
+    /* PARCEIROS entrou: é o estoque quem pede material ao fornecedor e
+       quem recebe a nota. Vê e lança pedido; não edita o cadastro do
+       parceiro, que é relacionamento da clínica. O valor do pedido ele
+       enxerga — é o mesmo "lança os valores dos produtos conforme nf"
+       que o cliente já tinha pedido; margem, preço de venda e taxa de
+       maquininha continuam fora (valores:false). */
+    telas:["estoque","parceiros"],
     atender:false, prontuario:false, verClinico:false, estoque:true, agenda:false, financeiro:false, cadastro:false, admin:false,
-    parceiros:false, parceirosEdita:false,
+    parceiros:true, parceirosEdita:false,
     /* custo SIM, valores NÃO: para lançar a nota fiscal é preciso ver
        quanto se pagou pelo material; preço de venda, margem de lucro e
        taxas de maquininha são da clínica e não passam por aqui. Eram uma
@@ -1573,7 +1579,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v61 · 18/11/2026";
+const VERSAO = "v64 · 18/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2274,6 +2280,30 @@ const DB = {
       S.parceiros = await DB.rest("GET","parceiros?select=id,tipo,nome,contato,telefone,"+
         "whatsapp,email,endereco,cnpj,prazo_dias,observacao,preferido,ativo&order=tipo,nome");
     }catch(e){ S.parceiros = null; }
+    await DB.carregarPedidos();
+  },
+
+  /* Pedidos, itens e o resumo por parceiro. Separado de carregarParceiros
+     para poder recarregar só isto depois de salvar ou receber um pedido —
+     recarregar o cadastro inteiro a cada clique é desperdício visível. */
+  async carregarPedidos(){
+    S.pedidos = null; S.pedidoItens = null; S.parceiroResumo = null;
+    try{
+      const [ped, res] = await Promise.all([
+        DB.rest("GET","vw_pedidos?select=id,numero,tipo,descricao,status,parceiro_id,parceiro,"+
+          "parceiro_tipo,paciente_id,paciente,pedido_em,entrega_prevista,entregue_em,condicao,"+
+          "prazo_dias,vencimento,parcelas,valor_itens,frete,desconto,valor_total,nota_numero,"+
+          "observacao,lancado,pago,em_aberto,no_caixa,proximo_vencimento,entrega_atrasada,"+
+          "pagamento_vencido,linhas,recebidas&order=pedido_em.desc,numero.desc"),
+        DB.rest("GET","vw_parceiro_resumo?select=parceiro_id,pedidos,em_andamento,comprado,"+
+          "comprado_ano,pago,em_aberto,proximo_vencimento,entregas_atrasadas")
+      ]);
+      S.pedidos = ped; S.parceiroResumo = res;
+      S.pedidoItens = ped.length
+        ? await DB.rest("GET","pedido_itens?select=id,pedido_id,ordem,material_id,descricao,"+
+            "quantidade,unidade,valor_unitario,valor_total,quantidade_recebida&order=pedido_id,ordem")
+        : [];
+    }catch(e){ S.pedidos = null; }
   },
 
   async gravarParceiro(p){
@@ -4589,8 +4619,28 @@ const NOME_DENTE_DEC = {
 const QUADRANTE = {1:"superior direito",2:"superior esquerdo",3:"inferior esquerdo",4:"inferior direito",
                    5:"superior direito",6:"superior esquerdo",7:"inferior esquerdo",8:"inferior direito"};
 
+/* DENTE É BRANCO NOS DOIS TEMAS.
+
+   O desenho 2D puxava o esmalte de var(--surface) e a raiz de
+   var(--surface-2). No tema escuro esses tokens valem #211D15 e
+   #2A251B — quase preto. Resultado: no modo escuro a arcada inteira
+   sumia num cinza-chumbo sobre fundo chumbo, e só as marcações
+   coloridas apareciam.
+
+   O que muda com o tema é o FUNDO, não o esmalte. O 3D já tinha essa
+   lição (a constante ESMALTE existe lá desde a primeira versão); o 2D
+   tinha ficado para trás. Fixos nos dois temas, então. */
+const ESMALTE_2D = "#F2EEE4";   // coroa
+const DENTINA_2D = "#E3DAC9";   // raiz: bege, um degrau mais quente
+/* o contorno também é fixo: var(--line-2) é bege-claro no tema claro e
+   verde-oliva escuro no escuro — sobre um dente branco, o primeiro
+   quase some e o segundo vira traço preto. Um cinza médio funciona
+   igual sobre branco, venha de onde vier o fundo. */
+const TRACO_2D       = "#8C857A";
+const TRACO_2D_FRACO = "#C7BFB2";
+
 const CONDICOES = [
-  ["higido","Hígido","var(--surface)"],
+  ["higido","Hígido",ESMALTE_2D],
   ["carie","Cárie","var(--crit)"],
   ["restauracao","Restauração","var(--accent)"],
   ["coroa","Coroa","var(--warn)"],
@@ -4608,7 +4658,7 @@ const CONDICOES = [
   ["calculo","Cálculo","#8C7B6B"],
   ["outro","Outro","var(--ink-2)"]
 ];
-const corCondicao = c => (CONDICOES.find(x=>x[0]===c)||[,,"var(--surface)"])[2];
+const corCondicao = c => (CONDICOES.find(x=>x[0]===c)||[,,ESMALTE_2D])[2];
 const rotuloCondicao = c => (CONDICOES.find(x=>x[0]===c)||[,c])[1];
 
 /* A face voltada para dentro muda de nome conforme a arcada: em cima é
@@ -4708,7 +4758,7 @@ function tipoDente(fdi){
 }
 
 /* o traço fica mais pesado no dente que está selecionado */
-const traco2D = esperado => esperado ? "var(--line-2)" : "var(--line)";
+const traco2D = esperado => esperado ? TRACO_2D : TRACO_2D_FRACO;
 
 /* ---------- vista vestibular: coroa ----------
    De baixo para cima no sistema local: y=0 é o colo, y=hc é a borda
@@ -4781,7 +4831,7 @@ function svgDenteVest(fdi, cx, colo, dirY, estados, esperado){
   const vest = faces[1][0];
   const px = (u,y) => [(cx + u*ESC2D).toFixed(1), (colo + dirY*y*ESC2D).toFixed(1)].join(",");
   const cor = f => { const e = estados[fdi] && estados[fdi][f];
-    return e ? corCondicao(e.condicao) : (esperado ? "var(--surface)" : "transparent"); };
+    return e ? corCondicao(e.condicao) : (esperado ? ESMALTE_2D : "transparent"); };
   const tr = traco2D(esperado);
   const g = [];
   raizesVestibular(fdi).forEach(r=>{
@@ -4867,7 +4917,7 @@ function corRaiz2D(fdi, estados, esperado){
   const achou = Object.values(est).find(e=>COND_RAIZ.has(e.condicao));
   if(achou && achou.condicao!=="ausente" && achou.condicao!=="extraido")
     return corCondicao(achou.condicao);
-  return esperado ? "var(--surface-2)" : "transparent";
+  return esperado ? DENTINA_2D : "transparent";
 }
 
 function svgDenteOcl(fdi, cx, cy, vestParaCima, estados, esperado){
@@ -4882,7 +4932,7 @@ function svgDenteOcl(fdi, cx, cy, vestParaCima, estados, esperado){
   // superior e para baixo na inferior
   const giro = vestParaCima ? 0 : 180;
   const cor = f => { const e = estados[fdi] && estados[fdi][f];
-    return e ? corCondicao(e.condicao) : (esperado ? "var(--surface)" : "transparent"); };
+    return e ? corCondicao(e.condicao) : (esperado ? ESMALTE_2D : "transparent"); };
   const tr = traco2D(esperado);
   const K = 0.46;                       // tamanho do miolo
 
@@ -5689,15 +5739,20 @@ function malhaGengiva(ordem, superior){
   /* Perfil fechado, como um tubo: a primeira versão era uma fita
      aberta de topo chato e parede reta, e a arcada ficou com um muro
      rosa em volta. Rebordo é um cordão arredondado, baixo. */
-  const CRISTA = 1.0;    // o quanto a gengiva sobe no colo da coroa
+  const CRISTA = 0.55;   // altura da gengiva no MEIO do dente
+  const PAPILA = 1.05;   // o quanto ela sobe a mais ENTRE dois dentes
   const FUNDO  = 3.0;    // o quanto desce para o lado do osso
   /* A crista fica um pouco mais ESTREITA que o colo do dente: assim a
      coroa nasce por fora dela e a gengiva some entre os dentes, que é
      onde ela deve estar. Com a crista mais larga que o dente, a arcada
-     virava uma bandeja de plástico rosa com dentes afundados. */
+     virava uma bandeja de plástico rosa com dentes afundados.
+
+     Doze pontos no contorno, não oito: com oito, o cordão tinha canto
+     visível a cada 45° e nenhum sombreado salvava — ali a faceta é da
+     forma, não da luz. */
   const PERFIL = [       // [fator da espessura, altura]
-    [ 0.88,  CRISTA], [ 1.12,  0.0], [ 1.08, -1.5], [ 0.74, -FUNDO],
-    [-0.76, -FUNDO], [-1.08, -1.5], [-1.12,  0.0], [-0.88,  CRISTA]
+    [ 0.76,  1.00], [ 0.99,  0.48], [ 1.12, -0.30], [ 0.98, -1.70], [ 0.52, -FUNDO],
+    [-0.54, -FUNDO], [-1.00, -1.70], [-1.14, -0.30], [-1.00,  0.48], [-0.76,  1.00]
   ];
   const NP = PERFIL.length;
   const PASSOS = n*5;
@@ -5705,12 +5760,30 @@ function malhaGengiva(ordem, superior){
   for(let s=0;s<=PASSOS;s++){
     const a = (s/PASSOS - 0.5)*2;
     const h = espEm(a);
+    /* A PAPILA — o pico de gengiva entre dois dentes.
+       Era isto que faltava para a arcada parecer uma boca: com a
+       margem reta, a gengiva lia como uma fita de plástico colada
+       atrás dos dentes. A margem de verdade é festonada: desce no
+       meio da coroa e sobe no ponto de contato. fi é a posição em
+       "dentes" ao longo do arco; inteiro cai no centro de um dente,
+       meio cai entre dois. */
+    /* O 1,05 ABAIXO NÃO É DETALHE: o contorno da gengiva vai um pouco
+       além do último molar (ang = a*ABERT*1.05), então o mesmo "a" cai
+       num ÂNGULO diferente do que cairia para um dente. Sem desfazer
+       esse 1,05 aqui, a papila nasce em fase com o primeiro dente e vai
+       desencontrando ao longo do arco — e no fundo ela aparece no meio
+       da coroa em vez de entre duas. Foi exatamente o que apareceu na
+       primeira tentativa. */
+    const fi = Math.max(0, Math.min(n-1.001, (a*1.05/2 + 0.5)*n - 0.5));
+    const pap = 0.5 - 0.5*Math.cos(fi*Math.PI*2);
+    const alt = CRISTA + PAPILA*pap;
     const ang = a*ABERT*1.05;             // passa um pouco dos últimos molares
     const x = ARC_RX*Math.sin(ang), z = -ARC_RZ*Math.cos(ang);
     let nx = x/(ARC_RX*ARC_RX), nz = z/(ARC_RZ*ARC_RZ);
     const L = Math.hypot(nx,nz)||1; nx/=L; nz/=L;
     PERFIL.forEach(([fo,dy],k)=>
-      linhas[k].push(add(v3(x+nx*h*fo, yb + dir*dy, z+nz*h*fo))));
+      linhas[k].push(add(v3(x+nx*h*fo, yb + dir*(dy>0 ? dy*alt : dy),
+                            z+nz*h*fo))));
   }
   for(let k=0;k<NP;k++){
     const k2 = (k+1)%NP;
@@ -5760,11 +5833,59 @@ function corReal(expr){
 }
 function limparCoresCache(){ _corCache = {}; }
 
+/* O sombreado suave chama isto DUAS vezes por triângulo (a ponta clara
+   e a escura do gradiente), e são milhares por quadro. A conta é
+   barata; quem custava era reconhecer a cor de novo a cada chamada,
+   sempre as mesmas meia dúzia de strings. */
+const _rgbPar = new Map();
 function rgbMix(cor, k){                 // clareia/escurece para a luz
-  const m = /rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(cor);
-  if(!m) return cor;
-  const f = v => Math.max(0, Math.min(255, Math.round(+v*k)));
-  return "rgb("+f(m[1])+","+f(m[2])+","+f(m[3])+")";
+  let p = _rgbPar.get(cor);
+  if(p === undefined){
+    const m = /rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(cor);
+    p = m ? [+m[1], +m[2], +m[3]] : null;
+    if(_rgbPar.size < 400) _rgbPar.set(cor, p);
+  }
+  if(!p) return cor;
+  const f = v => { const n = v*k; return n < 0 ? 0 : n > 255 ? 255 : (n+0.5)|0; };
+  return "rgb("+f(p[0])+","+f(p[1])+","+f(p[2])+")";
+}
+
+/* GOURAUD NUM CANVAS 2D, QUE NÃO INTERPOLA COR POR VÉRTICE.
+
+   O truque é que a luz de um triângulo plano varia LINEARMENTE pela
+   tela. Então existe uma direção em que ela só cresce, e nessa direção
+   um gradiente linear reproduz a interpolação exata — não é
+   aproximação. A direção sai resolvendo o plano que passa pelos três
+   pares (posição, luz); os extremos saem projetando os três vértices
+   nela.
+
+   Sem isso só haveria dois caminhos: pintar chapado (a malha aparece)
+   ou subdividir cada triângulo (quatro vezes mais caro para esconder
+   o mesmo degrau). */
+function gradTri(ctx, t, cor, f){
+  const x0=t.A.sx, y0=t.A.sy;
+  const e1x=t.B.sx-x0, e1y=t.B.sy-y0;
+  const e2x=t.C.sx-x0, e2y=t.C.sy-y0;
+  const l0=t.la*f, l1=t.lb*f, l2=t.lc*f;
+  const det = e1x*e2y - e1y*e2x;
+  const media = (l0+l1+l2)*0.3333333;
+  if(!det) return rgbMix(cor, media);
+  const gx = ((l1-l0)*e2y - (l2-l0)*e1y)/det;
+  const gy = (e1x*(l2-l0) - e2x*(l1-l0))/det;
+  const g = Math.hypot(gx, gy);
+  if(g < 1e-4) return rgbMix(cor, media);
+  const ux=gx/g, uy=gy/g;
+  const t1=e1x*ux+e1y*uy, t2=e2x*ux+e2y*uy;
+  const tmin=Math.min(0,t1,t2), tmax=Math.max(0,t1,t2);
+  /* Triângulo curto na direção da luz: o gradiente custa o mesmo de um
+     grande e, em menos de dois pixels, ninguém distingue dele a média.
+     Com 6.500 triângulos por quadro, pular os pequenos é a diferença
+     entre redesenhar em 50 ms e em 35. */
+  if(tmax-tmin < 2) return rgbMix(cor, media);
+  const gr = ctx.createLinearGradient(x0+ux*tmin, y0+uy*tmin, x0+ux*tmax, y0+uy*tmax);
+  gr.addColorStop(0, rgbMix(cor, l0+g*tmin));
+  gr.addColorStop(1, rgbMix(cor, l0+g*tmax));
+  return gr;
 }
 
 /* Luz fixa na câmera: vinda de cima, da esquerda e da frente. Presa à
@@ -5772,7 +5893,18 @@ function rgbMix(cor, k){                 // clareia/escurece para a luz
    luz presa à cena, metade das voltas deixa a arcada na sombra. */
 const LUZ = (()=>{ const v=v3(-0.35,0.62,0.70); const l=Math.hypot(v.x,v.y,v.z);
   return v3(v.x/l, v.y/l, v.z/l); })();
-const ESMALTE = "rgb(236,230,217)";
+
+/* MEIO-VETOR entre a luz e o olho (Blinn-Phong). O brilho do esmalte
+   não é a luz refletida direto na direção da câmera — é onde a normal
+   aponta para o meio do caminho entre as duas. Calculado uma vez: é
+   constante, porque a luz é presa à câmera. */
+const MEIO = (()=>{ const x=LUZ.x, y=LUZ.y, z=LUZ.z+1;
+  const l=Math.hypot(x,y,z); return v3(x/l, y/l, z/l); })();
+
+/* Esmalte um pouco mais claro e menos amarelo do que era, e gengiva
+   mais viva: com a luz difusa quase chapada de antes, cor quente
+   compensava; com brilho especular de verdade, ela virava dente velho. */
+const ESMALTE = "rgb(243,239,231)";
 
 /* ---------- o visualizador ---------- */
 const O3D = {
@@ -5823,6 +5955,7 @@ const O3D = {
     const W=O3D.cv.width, H=O3D.cv.height;
     const f = Math.min(W,H) * 1.70;
     const tris=[];
+    let nObj = 0;
 
     /* uma só projeção, usada pelos dentes e pela gengiva */
     const P = w => {
@@ -5868,28 +6001,86 @@ const O3D = {
         ax[t.b]+=nx; ay[t.b]+=ny; az[t.b]+=nz;
         ax[t.c]+=nx; ay[t.c]+=ny; az[t.c]+=nz;
       }
-      /* a luz de cada vértice é calculada UMA vez; antes saía três
-         vezes por triângulo, e cada vértice pertence a cerca de seis */
+      /* O SOMBREADO AGORA É POR VÉRTICE, E O TRIÂNGULO INTERPOLA.
+
+         Antes o vértice tinha luz própria, mas o triângulo era pintado
+         com a MÉDIA dos três — cor chapada. Por isso a malha aparecia:
+         dois triângulos vizinhos dividem dois vértices e mesmo assim
+         saíam em tons diferentes, e o olho lê a fronteira entre eles
+         como uma aresta. Era isso que dava a cara de pedra lapidada,
+         não a contagem de triângulos.
+
+         Agora cada vértice carrega o seu valor e o preenchimento
+         interpola entre eles (Gouraud). Dois triângulos que compartilham
+         uma aresta chegam nela com o MESMO valor nos dois vértices, e a
+         emenda desaparece — sem um triângulo a mais.
+
+         O brilho também virou por vértice, com meio-vetor, no lugar do
+         "normal da face apontando para a câmera" que era por triângulo
+         e, por isso, aparecia como mancha poligonal. */
+      const brilhoV = new Float32Array(proj.length);
       const lumV = new Float32Array(proj.length);
       for(let i=0;i<proj.length;i++){
         const x=ax[i], y=ay[i], z=az[i];
         const l = Math.sqrt(x*x+y*y+z*z) || 1;
-        const d = (x*LUZ.x + y*LUZ.y + z*LUZ.z) / l;
+        const nx=x/l, ny=y/l, nz=z/l;
+        const d = nx*LUZ.x + ny*LUZ.y + nz*LUZ.z;
         lumV[i] = d > 0 ? d : 0;
+        const h = nx*MEIO.x + ny*MEIO.y + nz*MEIO.z;
+        brilhoV[i] = h > 0 ? Math.pow(h, 34) * 0.30 : 0;
       }
-      // 2ª passada: emite com a luz média dos três vértices
+      /* ambiente 0,54 e difusa 0,52: a soma antiga (0,62 + 0,46) deixava
+         o escuro claro demais e o volume lia como adesivo. */
+      const tom = i => 0.52 + 0.50*lumV[i] + brilhoV[i];
+      const tomV = new Float32Array(proj.length);
+      for(let i=0;i<proj.length;i++) tomV[i] = tom(i);
+
+      // 2ª passada: emite guardando o tom dos TRÊS vértices
+      let soma = 0, quantos = 0;
+      const meus = [];
       for(let k=0;k<lista.length;k++){
         const t=lista[k], A=proj[t.a], B=proj[t.b], C=proj[t.c];
         // descarta o que está de costas; mao=0 é superfície de dois lados
         const area = (B.sx-A.sx)*(C.sy-A.sy) - (C.sx-A.sx)*(B.sy-A.sy);
         if(mao ? area*mao <= 0 : area === 0) continue;
-        const dif = (lumV[t.a] + lumV[t.b] + lumV[t.c]) * 0.3333333;
-        /* um specular fraco e largo: esmalte reflete, mas dente com
-           brilho de bola de bilhar vira plástico */
-        const fn = faceN[k];
-        const esp = Math.pow(Math.max(0, fn[2]), 14) * 0.14;
-        tris.push(Object.assign({A,B,C, z:(A.z+B.z+C.z)/3, face:t.face,
-                                 lum: 0.62 + 0.46*dif + esp}, extra));
+        const la=tomV[t.a], lb=tomV[t.b], lc=tomV[t.c];
+        const z=(A.z+B.z+C.z)/3;
+        soma += z; quantos++;
+        meus.push(Object.assign({A,B,C, z, face:t.face,
+                                 la, lb, lc, lum:(la+lb+lc)*0.3333333}, extra));
+      }
+      /* PROFUNDIDADE DO OBJETO INTEIRO, não só do triângulo.
+
+         Sem z-buffer, quem decide o que cobre o quê é a ordem de
+         desenho, e ordenar TODOS os triângulos da cena juntos quebra
+         onde dois dentes se tocam: um triângulo do vizinho, com centro
+         um fio à frente, era desenhado por cima e aparecia como um
+         retalho colado no meio da coroa. Era isso — não a luz — que
+         deixava os incisivos com cara de colagem.
+
+         Dente é convexo e quase não invade o vizinho, então ordenar
+         primeiro por DENTE e só depois por triângulo acerta: o dente
+         de trás sai inteiro antes do da frente.
+
+         A gengiva é a exceção, porque ela atravessa os dentes de
+         propósito: vai sempre primeiro (objZ infinito). Com a raiz à
+         mostra ela precisa tingir o que está atrás, e aí volta a
+         ordenação global — é o único caso em que ela é a certa. */
+      /* EMPATE DE PROFUNDIDADE NÃO É CASO RARO AQUI — É O NORMAL.
+         A arcada é simétrica: na vista de frente, 11 e 21 ficam à
+         MESMA distância da câmera, e 12 com 22, e 13 com 23. Com objZ
+         igual a ordenação caía de volta no triângulo e os dois dentes
+         voltavam a se intercalar — por isso os retalhos sobravam
+         justamente nos incisivos centrais depois que as laterais já
+         tinham ficado limpas. objN desempata pela ordem de entrada na
+         cena: qual dos dois vai à frente é arbitrário, mas é sempre o
+         mesmo, e um dente inteiro na frente do outro não deixa emenda. */
+      const objZ = O3D.raizes ? null : (quantos ? soma/quantos : 0);
+      const objN = nObj++;
+      for(const t of meus){
+        t.objZ = objZ === null ? t.z : objZ;
+        t.objN = objN;
+        tris.push(t);
       }
     };
 
@@ -5897,7 +6088,13 @@ const O3D = {
     if(!O3D.rapido || !O3D.raizes){
       gengivasDaCena(pac).forEach(g=>{
         const proj = g.V.map(P);
+        const antes = tris.length;
         emitir(proj, g.T, {fdi:null, sumiu:false, deciduo:false}, 0);
+        /* a gengiva vai para o fundo da fila de objetos; dentro dela a
+           ordem por triângulo continua valendo */
+        if(!O3D.raizes) for(let i=antes;i<tris.length;i++){
+          tris[i].objZ = 1e9; tris[i].objN = -1;
+        }
       });
     }
 
@@ -5924,7 +6121,7 @@ const O3D = {
       emitir(proj, lista, {fdi:d.fdi, sumiu, deciduo:!!d.deciduo,
                            todo:condDente, implante:ehImplante}, d.mao);
     });
-    tris.sort((a,b)=>b.z-a.z);
+    tris.sort((a,b)=> (b.objZ - a.objZ) || (a.objN - b.objN) || (b.z - a.z));
     return tris;
   },
 
@@ -5933,12 +6130,33 @@ const O3D = {
     const W=O3D.cv.width, H=O3D.cv.height;
     ctx.clearRect(0,0,W,H);
     const tris = O3D.tris = O3D.montar();
+    /* gradiente só fora do arraste: girando, a malha passa tão rápido
+       que a costura não é vista, e cada quadro economiza milhares de
+       objetos de gradiente */
+    const suave = !O3D.rapido;
+    const DIL = 0.5*(O3D.dpr||1);
+    for(const t of tris){
+      const cx=(t.A.sx+t.B.sx+t.C.sx)/3, cy=(t.A.sy+t.B.sy+t.C.sy)/3;
+      let dx=t.A.sx-cx, dy=t.A.sy-cy, d=Math.hypot(dx,dy)||1;
+      t.dax=dx/d*DIL; t.day=dy/d*DIL;
+      dx=t.B.sx-cx; dy=t.B.sy-cy; d=Math.hypot(dx,dy)||1;
+      t.dbx=dx/d*DIL; t.dby=dy/d*DIL;
+      dx=t.C.sx-cx; dy=t.C.sy-cy; d=Math.hypot(dx,dy)||1;
+      t.dcx=dx/d*DIL; t.dcy=dy/d*DIL;
+    }
 
     /* Dente é branco nos dois temas. Puxar de --surface deixava a
        arcada PRETA no escuro, que é o oposto de um dente. O que muda
        com o tema é o fundo, não o esmalte. */
     const esmalte = ESMALTE;
-    const osso    = corReal("var(--ink-3)");
+    /* O dente ausente é um FANTASMA, não um buraco. Vinha de
+       var(--ink-3), que no tema escuro é #938C7C sobre fundo #17150F:
+       um vulto escuro sobre fundo escuro, e com 30% de opacidade
+       sumia de vez. Era a queixa de "ficou bem escuro e muito
+       transparente" — e numa boca com muitos dentes marcados como
+       ausentes isso é a arcada inteira.
+       Cinza claro fixo, igual nos dois temas, como o esmalte. */
+    const osso    = "rgb(178,174,166)";
     const sel     = corReal("var(--accent)");
     /* dentina/cemento: um bege quente. Antes eu usava --warn-soft e as
        raízes saíam amarelo-gema, puxando o olho para o que menos
@@ -5946,7 +6164,7 @@ const O3D = {
     const RAIZ    = "rgb(206,188,163)";
     /* rosa de mucosa. Fixo nos dois temas, como o esmalte: gengiva
        escura num tema escuro vira buraco preto no meio da boca. */
-    const GENGIVA = "rgb(203,151,147)";
+    const GENGIVA = "rgb(224,143,142)";
 
     for(const t of tris){
       const lum = t.lum;
@@ -5977,15 +6195,36 @@ const O3D = {
          face tem condição, o realce é só um clareado dela. */
       const temCond = base !== esmalte && t.face !== "R" && t.face !== "G"
                       && t.face !== "IMP" && t.face !== "IMPR";
-      ctx.fillStyle = marcado ? (temCond ? rgbMix(base, lum*1.22) : rgbMix(sel, lum*1.15))
-                              : rgbMix(base, lum);
+      const corFim = marcado && !temCond ? sel : base;
+      const fator   = marcado ? (temCond ? 1.22 : 1.15) : 1;
+      ctx.fillStyle = suave ? gradTri(ctx, t, corFim, fator)
+                            : rgbMix(corFim, lum*fator);
       /* com a raiz à mostra a gengiva fica translúcida — é assim que
          se olha um canal sem perder a referência de onde é o colo */
-      ctx.globalAlpha = t.face==="G" ? (O3D.raizes ? 0.38 : 1)
-                      : t.implante ? 1
-                      : t.sumiu ? 0.30 : (t.deciduo ? 0.96 : 1);
+      const alfa = t.face==="G" ? (O3D.raizes ? 0.38 : 1)
+                 : t.implante ? 1
+                 : t.sumiu ? 0.48 : (t.deciduo ? 0.96 : 1);
+      ctx.globalAlpha = alfa;
+      /* A DILATAÇÃO SÓ VALE PARA O QUE É OPACO.
+         Em superfície translúcida ela faz o contrário do que foi feita
+         para fazer: cada triângulo invade meio pixel do vizinho, as
+         duas bordas se somam no mesmo pixel e a emenda, em vez de
+         sumir, fica MAIS escura — a malha inteira aparece como arame.
+         Era o que acontecia com o dente ausente, que é desenhado a
+         48%. Opaco: dilata. Translúcido: não. */
+      const k = alfa > 0.99 ? 1 : 0;
+      /* MEIO PIXEL PARA FORA, a partir do centro do triângulo.
+
+         O canvas suaviza a borda de cada preenchimento, e duas bordas
+         suavizadas encostadas deixam passar uma fresta do que está
+         atrás — é a trama branca que aparecia por cima da arcada, e
+         que lia como wireframe. Dilatar faz cada triângulo invadir
+         meio pixel do vizinho e a fresta fechar. Meio pixel não
+         deforma nada: o triângulo tem dezenas. */
       ctx.beginPath();
-      ctx.moveTo(t.A.sx,t.A.sy); ctx.lineTo(t.B.sx,t.B.sy); ctx.lineTo(t.C.sx,t.C.sy);
+      ctx.moveTo(t.A.sx + t.dax*k, t.A.sy + t.day*k);
+      ctx.lineTo(t.B.sx + t.dbx*k, t.B.sy + t.dby*k);
+      ctx.lineTo(t.C.sx + t.dcx*k, t.C.sy + t.dcy*k);
       ctx.closePath(); ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -7936,7 +8175,12 @@ async function mudarProtese(id, campos, pacId, msg){
    que não cabe em lista fechada, e fechar a lista obriga a cadastrar
    tudo como "Outro", que é o mesmo que não ter campo.
    ===================================================================== */
-const TIPOS_PARCEIRO = ["Laboratório de prótese", "Radiologia / scanner", "Sedação"];
+/* O cliente foi explícito: "os parceiros podem ser outras clinicas, mas
+   tambem podem ser fornecedores de materiais, proteses e outros
+   materiais especificos". A lista de partida passa a dizer isso. */
+const TIPOS_PARCEIRO = ["Laboratório de prótese", "Fornecedor de materiais",
+  "Radiologia / scanner", "Sedação", "Clínica parceira",
+  "Manutenção de equipamento", "Prestador de serviço"];
 let parcForm = null;     // {id} ao editar, {} ao criar, null fechado
 let parcBusca = "";
 
@@ -7959,6 +8203,452 @@ const PARCEIROS_SEED = [
 const parceiros = () => (S.parceiros && S.parceiros.length) ? S.parceiros
   : (MODO === "nuvem" ? [] : PARCEIROS_SEED);
 
+/* =====================================================================
+   PEDIDOS A PARCEIROS
+
+   "nao incluimos em parceiros os valor dos pedidos (...) precisamos ter
+   esse controle tanto de pedido como de recebimento, pagamentos e serem
+   realizados com data de vencimento mediante data de entrega ou conforme
+   acordado no pedido. essas despesas tambem precisam estar relacionadas
+   no fluxo de caixa e relatorios."
+
+   A decisão que organiza o resto: o pedido NÃO tem pagamento próprio.
+   Ele vira DESPESA — a mesma tabela do aluguel e da limpeza. Com isso
+   o pedido ao laboratório entra no fluxo de caixa, no painel e nos
+   relatórios sem nenhuma integração nova, e não existe a chance de dois
+   lugares discordarem sobre quanto a clínica deve ao fornecedor.
+
+   O vencimento é DERIVADO, não digitado: "30 dias após a entrega" só
+   vira data quando a entrega acontece, e até lá a previsão sai da
+   entrega prevista. Quem digita a data na mão esquece de refazer a
+   conta justamente quando o fornecedor atrasa.
+   ===================================================================== */
+/* htmlPedidosParceiro, e não htmlPedidos: já existe um htmlPedidos no
+   app, que desenha os PEDIDOS DE ACESSO em Configurações. Duas funções
+   com o mesmo nome no mesmo escopo não dão erro em JavaScript — a
+   última declarada simplesmente apaga a outra, e a tela de pedidos a
+   fornecedor passa a mostrar a lista de quem pediu login. Foi o que
+   aconteceu aqui antes do teste pegar. */
+let parcAba  = "parceiros";   // "parceiros" | "pedidos"
+let pedForm  = null;          // pedido em edição
+let pedItens = null;          // rascunho das linhas
+let pedVer   = null;          // id do pedido com as linhas abertas
+let pedFiltro = "abertos";    // "abertos" | "todos" | "atrasados"
+
+const COND_PEDIDO = [
+  ["a_vista",          "À vista, no pedido"],
+  ["na_entrega",       "Na entrega"],
+  ["dias_apos_entrega","Dias após a entrega"],
+  ["dias_apos_pedido", "Dias após o pedido"],
+  ["data_fixa",        "Data combinada"]
+];
+const TIPO_PEDIDO = [
+  ["material",    "Material"],
+  ["protese",     "Prótese"],
+  ["servico",     "Serviço"],
+  ["equipamento", "Equipamento"],
+  ["outro",       "Outro"]
+];
+const SIT_PEDIDO = {
+  rascunho:{rot:"rascunho", cls:"neutral"},
+  enviado:{rot:"enviado", cls:"neutral"},
+  confirmado:{rot:"confirmado", cls:"warn"},
+  recebido_parcial:{rot:"recebido em parte", cls:"warn"},
+  recebido:{rot:"recebido", cls:"ok"},
+  cancelado:{rot:"cancelado", cls:"crit"}
+};
+const rotCond = v => (COND_PEDIDO.find(c=>c[0]===v)||["",v])[1];
+const rotTipoPed = v => (TIPO_PEDIDO.find(c=>c[0]===v)||["",v])[1];
+
+const pedidos = () => S.pedidos || [];
+const itensDoPedido = id => (S.pedidoItens||[]).filter(i=>i.pedido_id===id)
+  .sort((a,b)=>(a.ordem||0)-(b.ordem||0));
+const resumoParceiro = id => (S.parceiroResumo||[]).find(r=>r.parceiro_id===id) || null;
+
+/* A MESMA CONTA DO BANCO, DO LADO DA TELA — para o formulário mostrar
+   o vencimento enquanto a pessoa escolhe a condição, em vez de só
+   depois de salvar. Se as duas discordarem, quem manda é o banco: ele
+   recalcula no gatilho a cada gravação. */
+function vencimentoPrevisto(d){
+  if(d.condicao === "data_fixa") return d.vencimento || null;
+  const base = (d.condicao === "a_vista" || d.condicao === "dias_apos_pedido")
+    ? d.pedido_em
+    : (d.entregue_em || d.entrega_prevista);
+  if(!base) return null;
+  if(d.condicao === "a_vista" || d.condicao === "na_entrega") return base;
+  const x = new Date(base+"T12:00:00");
+  x.setDate(x.getDate() + Number(d.prazo_dias||0));
+  return diaISO(x);
+}
+
+function pedidosFiltrados(){
+  const p = pedidos();
+  if(pedFiltro === "todos") return p;
+  if(pedFiltro === "atrasados")
+    return p.filter(x=>x.entrega_atrasada || x.pagamento_vencido);
+  return p.filter(x=>x.status !== "recebido" || Number(x.em_aberto||0) > 0.005);
+}
+
+function htmlPedidosParceiro(){
+  if(S.pedidos === null || S.pedidos === undefined){
+    return '<div class="stage">Não consegui ler os pedidos. Se a atualização '
+      + '<b>ATUALIZAR-PEDIDOS-PARCEIROS.sql</b> ainda não foi rodada no banco, é isso — '
+      + 'as tabelas <code>pedidos_parceiro</code> e <code>pedido_itens</code> são criadas '
+      + 'por ela.</div>';
+  }
+  const lista = pedidosFiltrados();
+  const tot = lista.reduce((a,x)=>({
+    total: a.total + Number(x.valor_total||0),
+    aberto: a.aberto + Number(x.em_aberto||0),
+    foraDoCaixa: a.foraDoCaixa + (x.no_caixa ? 0 : Number(x.valor_total||0))
+  }), {total:0, aberto:0, foraDoCaixa:0});
+  const atrasados = pedidos().filter(x=>x.entrega_atrasada).length;
+  const vencidos  = pedidos().filter(x=>x.pagamento_vencido).length;
+
+  return '<div class="row" style="margin-bottom:8px;flex-wrap:wrap">'
+    + (pode("valores")||pode("lancaLote")
+        ? '<button class="btn primary" id="pdNovo">+ Novo pedido</button>' : "")
+    + '<select id="pdFiltro" style="max-width:200px">'
+    + [["abertos","Em aberto"],["atrasados","Com atraso"],["todos","Todos"]]
+        .map(([v,r])=>'<option value="'+v+'"'+(pedFiltro===v?" selected":"")+'>'+r+'</option>').join("")
+    + '</select></div>'
+
+    + (pedForm ? htmlPedidoForm(pedForm) : "")
+
+    + '<div class="tiles" style="margin-top:10px">'
+    + '<div class="tile"><b>'+fmtBRL(cent(tot.total))+'</b><span>pedido no recorte</span></div>'
+    + '<div class="tile warn"><b>'+fmtBRL(cent(tot.aberto))+'</b><span>a pagar</span></div>'
+    + (atrasados ? '<div class="tile crit"><b>'+atrasados
+        +'</b><span>entrega(s) atrasada(s)</span></div>' : "")
+    + (vencidos ? '<div class="tile crit"><b>'+vencidos
+        +'</b><span>pagamento(s) vencido(s)</span></div>' : "")
+    + (tot.foraDoCaixa > 0.005 ? '<div class="tile warn"><b>'+fmtBRL(cent(tot.foraDoCaixa))
+        +'</b><span>ainda fora do caixa</span></div>' : "")
+    + '</div>'
+    + (tot.foraDoCaixa > 0.005 ? '<div class="stage" style="margin-top:8px">'
+        + 'Pedido só entra no fluxo de caixa quando é <b>lançado no caixa</b> — é ali que '
+        + 'ele vira despesa, com a mesma conta e o mesmo vencimento. Até lá ele existe '
+        + 'como compromisso, mas não aparece no saldo.</div>' : "")
+
+    + (lista.length ? '<div class="list" style="margin-top:10px">'
+        + lista.map(htmlCartaoPedido).join("") + '</div>'
+      : '<div class="empty" style="margin-top:10px">'
+        + (pedFiltro==="todos" ? 'Nenhum pedido registrado. O que a clínica compra de '
+            + 'laboratório, fornecedor e prestador entra aqui — e daqui vai para o caixa.'
+          : 'Nada '+(pedFiltro==="atrasados"?"atrasado":"em aberto")+'.')
+        + '</div>');
+}
+
+function htmlCartaoPedido(p){
+  const sit = SIT_PEDIDO[p.status] || {rot:p.status, cls:"neutral"};
+  const itens = itensDoPedido(p.id);
+  const aberto = Number(p.em_aberto||0);
+  return '<div class="card" style="margin-bottom:8px">'
+    + '<div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">'
+    + '<div style="flex:1 1 240px;min-width:0">'
+    + '<b style="font-size:14.5px">#'+(p.numero||"—")+' · '+esc(p.descricao)+'</b> '
+    + '<span class="pill '+sit.cls+'">'+sit.rot+'</span>'
+    + (p.entrega_atrasada ? ' <span class="pill crit">entrega atrasada</span>' : "")
+    + (p.pagamento_vencido ? ' <span class="pill crit">pagamento vencido</span>' : "")
+    + '<div style="font-size:12.5px;color:var(--ink-2);margin-top:3px">'
+    + esc(p.parceiro) + ' · ' + rotTipoPed(p.tipo)
+    + (p.paciente ? ' · paciente '+esc(p.paciente) : "") + '</div>'
+    + '<div style="font-size:11.5px;color:var(--ink-3);margin-top:2px">'
+    + 'pedido em '+fmtData(p.pedido_em)
+    + (p.entregue_em ? ' · entregue em '+fmtData(p.entregue_em)
+       : p.entrega_prevista ? ' · entrega prevista '+fmtData(p.entrega_prevista) : "")
+    + ' · ' + rotCond(p.condicao)
+    + (p.prazo_dias ? ' ('+p.prazo_dias+' dias)' : "")
+    + (p.vencimento ? ' · vence '+fmtData(p.vencimento) : ' · vencimento ainda sem data')
+    + (p.parcelas>1 ? ' · '+p.parcelas+'×' : "")
+    + '</div></div>'
+    + '<div style="flex:0 0 auto;text-align:right">'
+    + '<div style="font-size:15px;font-weight:700">'+fmtBRL(p.valor_total)+'</div>'
+    + (p.no_caixa
+        ? '<div style="font-size:11.5px;color:var(--ink-3)">pago '+fmtBRL(p.pago)
+          + (aberto>0.005 ? ' · falta '+fmtBRL(aberto) : ' · quitado')+'</div>'
+        : '<div style="font-size:11.5px;color:var(--warn)">fora do caixa</div>')
+    + '</div></div>'
+
+    + '<div class="rowbtns" style="margin-top:8px">'
+    + '<button class="minibtn" data-pdver="'+p.id+'">'
+      + (pedVer===p.id?"ocultar itens":"ver itens ("+(p.linhas||0)+")")+'</button>'
+    + (p.status!=="cancelado" && !p.entregue_em
+        ? '<button class="minibtn" data-pdreceber="'+p.id+'">✓ Recebi tudo hoje</button>' : "")
+    + (!p.no_caixa && p.status!=="cancelado" && Number(p.valor_total)>0 && pode("valores")
+        ? '<button class="minibtn" data-pdcaixa="'+p.id+'">Lançar no caixa</button>' : "")
+    + '<button class="minibtn" data-pded="'+p.id+'">Editar</button>'
+    + '</div>'
+
+    + (pedVer===p.id ? (itens.length
+        ? '<div class="rolar" style="margin-top:8px"><table class="tab-rel"><thead><tr>'
+          + '<th>Item</th><th class="n">Qtd</th><th class="n">Recebido</th>'
+          + '<th class="n">Unitário</th><th class="n">Total</th></tr></thead><tbody>'
+          + itens.map(i=>'<tr><td>'+esc(i.descricao)+'</td>'
+              + '<td class="n">'+fmtQtd(i.quantidade)+(i.unidade?" "+esc(i.unidade):"")+'</td>'
+              + '<td class="n">'+fmtQtd(i.quantidade_recebida)
+              + (Number(i.quantidade_recebida) >= Number(i.quantidade)
+                 ? ' <span class="pill ok">ok</span>' : "")+'</td>'
+              + '<td class="n">'+fmtBRL(i.valor_unitario)+'</td>'
+              + '<td class="n"><b>'+fmtBRL(i.valor_total)+'</b></td></tr>').join("")
+          + '</tbody><tfoot><tr><td colspan="4">Itens</td>'
+          + '<td class="n">'+fmtBRL(p.valor_itens)+'</td></tr>'
+          + (Number(p.frete)>0?'<tr><td colspan="4">Frete</td><td class="n">'
+              +fmtBRL(p.frete)+'</td></tr>':"")
+          + (Number(p.desconto)>0?'<tr><td colspan="4">Desconto</td><td class="n">−'
+              +fmtBRL(p.desconto)+'</td></tr>':"")
+          + '<tr><td colspan="4"><b>Total</b></td><td class="n"><b>'
+          + fmtBRL(p.valor_total)+'</b></td></tr></tfoot></table></div>'
+        : '<div class="stage" style="margin-top:8px">Pedido sem itens detalhados.</div>') : "")
+    + '</div>';
+}
+
+function htmlPedidoForm(f){
+  const linhas = pedItens || [{descricao:"", quantidade:1, unidade:"", valor_unitario:0}];
+  const soma = cent(linhas.reduce((a,x)=>
+    a + (Number(x.quantidade)||0)*(Number(x.valor_unitario)||0), 0));
+  const total = cent(soma + (Number(f.frete)||0) - (Number(f.desconto)||0));
+  const venc = vencimentoPrevisto({
+    condicao: f.condicao||"dias_apos_entrega", pedido_em: f.pedido_em||hojeISO(),
+    entrega_prevista: f.entrega_prevista, entregue_em: f.entregue_em,
+    prazo_dias: f.prazo_dias, vencimento: f.vencimento});
+  const precisaEntrega = (f.condicao||"dias_apos_entrega").indexOf("entrega") >= 0;
+
+  return '<div class="card" style="margin-top:10px">'
+    + '<div class="eyebrow">'+(f.id?"Editar pedido #"+(f.numero||""):"Novo pedido")+'</div>'
+    + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">'
+    + '<div class="grid2">'
+    + '<div class="field"><label for="pdParc">Parceiro</label><select id="pdParc">'
+    + '<option value="">— escolha —</option>'
+    + parceiros().filter(x=>x.ativo!==false).map(x=>'<option value="'+x.id+'"'
+        +(f.parceiro_id===x.id?" selected":"")+'>'+esc(x.nome)+' · '+esc(x.tipo)+'</option>').join("")
+    + '</select></div>'
+    + '<div class="field"><label for="pdTipo">Tipo</label><select id="pdTipo">'
+    + TIPO_PEDIDO.map(([v,r])=>'<option value="'+v+'"'+((f.tipo||"material")===v?" selected":"")
+        +'>'+r+'</option>').join("") + '</select></div></div>'
+    + '<div class="field"><label for="pdDesc">Descrição do pedido</label>'
+    + '<input id="pdDesc" placeholder="Coroa de zircônia 36 · Reposição de luvas e gaze" '
+    + 'value="'+esc(f.descricao||"")+'"></div>'
+
+    + '<div class="sec-h" style="margin-top:4px"><h2>Itens</h2>'
+    + '<span class="hint">quantidade × valor unitário</span></div>'
+    + '<div class="rolar"><table class="tab-rel"><thead><tr>'
+    + '<th>Descrição</th><th class="n">Qtd</th><th>Un.</th><th class="n">Unitário</th>'
+    + '<th class="n">Total</th><th></th></tr></thead><tbody>'
+    + linhas.map((x,i)=>'<tr>'
+        + '<td><input data-pid="'+i+'" value="'+esc(x.descricao||"")+'" '
+        + 'placeholder="o que foi pedido"></td>'
+        + '<td class="n"><input data-piq="'+i+'" class="mono" inputmode="decimal" '
+        + 'style="width:70px" value="'+String(x.quantidade??1).replace(".",",")+'"></td>'
+        + '<td><input data-piu="'+i+'" style="width:60px" value="'+esc(x.unidade||"")+'" '
+        + 'placeholder="un"></td>'
+        + '<td class="n"><input data-piv="'+i+'" class="mono" inputmode="decimal" '
+        + 'style="width:92px" value="'+String(x.valor_unitario??0).replace(".",",")+'"></td>'
+        + '<td class="n"><b>'+fmtBRL((Number(x.quantidade)||0)*(Number(x.valor_unitario)||0))
+        + '</b></td>'
+        + '<td><button class="minibtn" data-pix="'+i+'">remover</button></td></tr>').join("")
+    + '</tbody><tfoot><tr><td colspan="4">Soma dos itens</td>'
+    + '<td class="n"><b>'+fmtBRL(soma)+'</b></td><td></td></tr></tfoot></table></div>'
+    + '<div class="rowbtns"><button class="minibtn" id="pdMais">+ item</button></div>'
+
+    + '<div class="grid2">'
+    + '<div class="field"><label for="pdFrete">Frete (R$)</label>'
+    + '<input id="pdFrete" inputmode="decimal" class="mono" value="'
+    + String(f.frete||0).replace(".",",")+'"></div>'
+    + '<div class="field"><label for="pdDesc2">Desconto (R$)</label>'
+    + '<input id="pdDesc2" inputmode="decimal" class="mono" value="'
+    + String(f.desconto||0).replace(".",",")+'"></div></div>'
+
+    + '<div class="grid2">'
+    + '<div class="field"><label for="pdData">Data do pedido</label>'
+    + '<input id="pdData" type="date" value="'+(f.pedido_em||hojeISO())+'"></div>'
+    + '<div class="field"><label for="pdPrev">Entrega prevista</label>'
+    + '<input id="pdPrev" type="date" value="'+(f.entrega_prevista||"")+'"></div></div>'
+
+    + '<div class="grid2">'
+    + '<div class="field"><label for="pdCond">Pagamento combinado</label><select id="pdCond">'
+    + COND_PEDIDO.map(([v,r])=>'<option value="'+v+'"'
+        +((f.condicao||"dias_apos_entrega")===v?" selected":"")+'>'+r+'</option>').join("")
+    + '</select></div>'
+    + ((f.condicao||"dias_apos_entrega")==="data_fixa"
+        ? '<div class="field"><label for="pdVenc">Vence em</label>'
+          + '<input id="pdVenc" type="date" value="'+(f.vencimento||"")+'"></div>'
+        : '<div class="field"><label for="pdPrazo">Prazo em dias</label>'
+          + '<input id="pdPrazo" type="number" min="0" max="365" class="mono" value="'
+          + (f.prazo_dias ?? "")+'" placeholder="30"></div>')
+    + '</div>'
+    + '<div class="field"><label for="pdParcelas">Parcelas</label>'
+    + '<select id="pdParcelas">'
+    + Array.from({length:12},(_,i)=>i+1).map(n=>'<option value="'+n+'"'
+        +(Number(f.parcelas||1)===n?" selected":"")+'>'+n+'×</option>').join("")
+    + '</select></div>'
+    + '<div class="field"><label for="pdNota">Número da nota</label>'
+    + '<input id="pdNota" class="mono" value="'+esc(f.nota_numero||"")+'" '
+    + 'placeholder="opcional"></div>'
+    + '<div class="field"><label for="pdObs">Observação</label>'
+    + '<input id="pdObs" value="'+esc(f.observacao||"")+'"></div>'
+
+    + '<div class="stage"><b>Total do pedido: '+fmtBRL(total)+'</b> · '
+    + (venc ? 'vence em <b>'+fmtData(venc)+'</b>'
+            : precisaEntrega
+              ? 'o vencimento só terá data quando houver entrega prevista ou entrega feita — '
+                + 'é o combinado, não um campo esquecido'
+              : 'informe a data para calcular o vencimento')
+    + '</div>'
+    + '<div class="row"><button class="btn primary" style="flex:1" id="pdSalvar">'
+    + 'Salvar pedido</button>'
+    + '<button class="btn" id="pdCancelar">Cancelar</button></div>'
+    + '</div></div>';
+}
+
+function lerItensPedido(){
+  const n = document.querySelectorAll("#parcBox input[data-pid]").length;
+  const r = [];
+  for(let i=0;i<n;i++){
+    const g = s => (document.querySelector('#parcBox [data-'+s+'="'+i+'"]')||{}).value || "";
+    r.push({descricao: g("pid").trim(), quantidade: numBR(g("piq")),
+            unidade: g("piu").trim() || null, valor_unitario: numBR(g("piv"))});
+  }
+  return r;
+}
+
+function lerCabecalhoPedido(){
+  const cond = $("#pdCond").value;
+  return {parceiro_id: $("#pdParc").value || null,
+    tipo: $("#pdTipo").value, descricao: $("#pdDesc").value.trim(),
+    frete: numBR($("#pdFrete").value), desconto: numBR($("#pdDesc2").value),
+    pedido_em: $("#pdData").value || hojeISO(),
+    entrega_prevista: $("#pdPrev").value || null,
+    condicao: cond,
+    prazo_dias: $("#pdPrazo") ? ($("#pdPrazo").value===""?null:Number($("#pdPrazo").value)) : null,
+    vencimento: $("#pdVenc") ? ($("#pdVenc").value || null) : null,
+    parcelas: Number($("#pdParcelas").value||1),
+    nota_numero: $("#pdNota").value.trim() || null,
+    observacao: $("#pdObs").value.trim() || null};
+}
+
+function ligarPedidos(){
+  const f=$("#pdFiltro");
+  if(f) f.addEventListener("change", ()=>{ pedFiltro=f.value; renderParceiros(); });
+
+  const nv=$("#pdNovo");
+  if(nv) nv.addEventListener("click", ()=>{
+    pedForm = {condicao:"dias_apos_entrega", prazo_dias:30, parcelas:1,
+               pedido_em:hojeISO(), frete:0, desconto:0};
+    pedItens = [{descricao:"", quantidade:1, unidade:"", valor_unitario:0}];
+    renderParceiros();
+    setTimeout(()=>{ const el=$("#pdParc"); if(el){ el.focus();
+      el.scrollIntoView({block:"center", behavior:"smooth"}); } }, 60);
+  });
+  const cc=$("#pdCancelar");
+  if(cc) cc.addEventListener("click", ()=>{ pedForm=null; pedItens=null; renderParceiros(); });
+
+  $$("#parcBox [data-pdver]").forEach(b=>b.addEventListener("click", ()=>{
+    pedVer = pedVer === b.dataset.pdver ? null : b.dataset.pdver; renderParceiros(); }));
+
+  $$("#parcBox [data-pded]").forEach(b=>b.addEventListener("click", ()=>{
+    const p = pedidos().find(x=>x.id===b.dataset.pded); if(!p) return;
+    pedForm = {...p};
+    pedItens = itensDoPedido(p.id).map(i=>({descricao:i.descricao,
+      quantidade:Number(i.quantidade), unidade:i.unidade,
+      valor_unitario:Number(i.valor_unitario)}));
+    if(!pedItens.length) pedItens=[{descricao:"",quantidade:1,unidade:"",valor_unitario:0}];
+    renderParceiros();
+    setTimeout(()=>{ const el=$("#pdParc"); if(el)
+      el.scrollIntoView({block:"center", behavior:"smooth"}); }, 60);
+  }));
+
+  const mais=$("#pdMais");
+  if(mais) mais.addEventListener("click", ()=>{
+    pedForm = {...pedForm, ...lerCabecalhoPedido()};
+    pedItens = lerItensPedido().concat([{descricao:"",quantidade:1,unidade:"",valor_unitario:0}]);
+    renderParceiros();
+  });
+  $$("#parcBox [data-pix]").forEach(b=>b.addEventListener("click", ()=>{
+    const i = Number(b.dataset.pix);
+    pedForm = {...pedForm, ...lerCabecalhoPedido()};
+    const r = lerItensPedido().filter((_,k)=>k!==i);
+    pedItens = r.length ? r : [{descricao:"",quantidade:1,unidade:"",valor_unitario:0}];
+    renderParceiros();
+  }));
+  /* a condição muda quais campos existem (prazo × data fixa) e o
+     vencimento mostrado; por isso redesenha sem perder o que já foi
+     digitado */
+  ["pdCond","pdData","pdPrev","pdPrazo","pdVenc","pdFrete","pdDesc2"].forEach(id=>{
+    const el=$("#"+id); if(el) el.addEventListener("change", ()=>{
+      pedForm = {...pedForm, ...lerCabecalhoPedido()};
+      pedItens = lerItensPedido();
+      renderParceiros();
+    });
+  });
+
+  const sv=$("#pdSalvar");
+  if(sv) sv.addEventListener("click", async ()=>{
+    const d = lerCabecalhoPedido();
+    if(!d.parceiro_id){ toast("Escolha o parceiro."); $("#pdParc").focus(); return; }
+    if(!d.descricao){ toast("Descreva o pedido."); $("#pdDesc").focus(); return; }
+    const itens = lerItensPedido().filter(x=>x.descricao && x.quantidade>0);
+    if(!itens.length){ toast("Informe ao menos um item com descrição e quantidade."); return; }
+    if(d.condicao==="data_fixa" && !d.vencimento){
+      toast("Data combinada precisa da data de vencimento."); return; }
+    const ok = await naNuvem(async ()=>{
+      let id = pedForm && pedForm.id;
+      if(id){
+        await DB.rest("PATCH","pedidos_parceiro?id=eq."+id, d);
+        await DB.rest("DELETE","pedido_itens?pedido_id=eq."+id);
+      }else{
+        const r = await DB.rest("POST","pedidos_parceiro",
+          {clinica_id:DB.clinica, criado_por:DB.meuId, status:"enviado", ...d},
+          "return=representation");
+        id = r[0].id;
+      }
+      await DB.rest("POST","pedido_itens", itens.map((x,i)=>({
+        pedido_id:id, ordem:i+1, descricao:x.descricao, quantidade:x.quantidade,
+        unidade:x.unidade, valor_unitario:x.valor_unitario})));
+      await DB.carregarPedidos();
+    }, "pedido");
+    if(!ok) return;
+    pedForm=null; pedItens=null; renderParceiros(); toast("Pedido salvo.");
+  });
+
+  $$("#parcBox [data-pdreceber]").forEach(b=>b.addEventListener("click", async ()=>{
+    const id = b.dataset.pdreceber;
+    const ok = await naNuvem(async ()=>{
+      /* recebimento total: marca a data e completa as quantidades. O
+         gatilho do banco é que muda o status e, se a condição for
+         "após a entrega", recalcula o vencimento sozinho. */
+      await DB.rest("PATCH","pedidos_parceiro?id=eq."+id, {entregue_em: hojeISO()});
+      const itens = itensDoPedido(id);
+      for(const i of itens){
+        if(Number(i.quantidade_recebida) < Number(i.quantidade))
+          await DB.rest("PATCH","pedido_itens?id=eq."+i.id,
+            {quantidade_recebida: i.quantidade});
+      }
+      await DB.carregarPedidos();
+    }, "recebimento do pedido");
+    if(!ok) return;
+    renderParceiros();
+    toast("Pedido recebido em "+fmtData(hojeISO())+". O vencimento foi recalculado.");
+  }));
+
+  $$("#parcBox [data-pdcaixa]").forEach(b=>b.addEventListener("click", async ()=>{
+    const id = b.dataset.pdcaixa;
+    const p = pedidos().find(x=>x.id===id);
+    if(p && !p.vencimento && !confirm(
+      "Este pedido ainda não tem data de vencimento (o combinado depende da entrega). "
+      + "Lançar no caixa assim? A despesa entra sem data de vencimento.")) return;
+    let n = 0;
+    const ok = await naNuvem(async ()=>{
+      n = await DB.rest("POST","rpc/lancar_despesa_do_pedido", {p_pedido:id});
+      await DB.carregarPedidos();
+      await DB.carregarCaixa();
+    }, "lançamento do pedido no caixa");
+    if(!ok) return;
+    renderParceiros(); renderFinanceiro();
+    toast(Number(n)+" despesa(s) criada(s). O pedido já aparece no fluxo de caixa.");
+  }));
+}
+
 function renderParceiros(){
   const box = $("#parcBox"); if(!box) return;
   if(!pode("parceiros")){ box.innerHTML = '<div class="empty">Seu perfil não acessa parceiros.</div>'; return; }
@@ -7974,7 +8664,15 @@ function renderParceiros(){
      achando que o sistema não tem aquilo. */
   const tipos = [...new Set(TIPOS_PARCEIRO.concat(todos.map(p=>p.tipo)))];
 
-  box.innerHTML = `
+  const verPedidos = pode("valores") || pode("lancaLote");
+  if(parcAba === "pedidos" && !verPedidos) parcAba = "parceiros";
+  if(parcAba === "pedidos"){
+    box.innerHTML = htmlAbasParceiro(verPedidos) + htmlPedidosParceiro();
+    ligarAbasParceiro(); ligarPedidos();
+    return;
+  }
+
+  box.innerHTML = htmlAbasParceiro(verPedidos) + `
     ${(S.faltaSql||[]).some(f=>f.nome.includes("parceiros")) ? htmlFaltaSql("parceiros") : ""}
     <div class="stage" style="margin-bottom:12px">Quem a clínica aciona por fora: protético,
       radiologia, anestesista. Marque um como <b>preferido</b> em cada tipo e ele aparece
@@ -8002,7 +8700,21 @@ function renderParceiros(){
 
     ${t && !lista.length ? `<div class="empty">Nada encontrado com “${parcBusca}”.</div>` : ""}`;
 
+  ligarAbasParceiro();
   ligarParceiros();
+}
+
+function htmlAbasParceiro(verPedidos){
+  if(!verPedidos) return "";
+  const abas = [["parceiros","Parceiros"],["pedidos","Pedidos e pagamentos"]];
+  return '<div class="aba" role="tablist" style="margin-bottom:12px">'
+    + abas.map(([k,r])=>'<button role="tab" aria-selected="'+(k===parcAba)+'" '
+        + 'data-parcaba="'+k+'">'+r+'</button>').join("") + '</div>';
+}
+function ligarAbasParceiro(){
+  $$("#parcBox [data-parcaba]").forEach(b=>b.addEventListener("click", ()=>{
+    parcAba = b.dataset.parcaba; pedForm=null; pedItens=null; renderParceiros();
+  }));
 }
 
 function cartaoParceiro(p, edita){
@@ -8019,6 +8731,18 @@ function cartaoParceiro(p, edita){
         ${p.prazo_dias!==null && p.prazo_dias!==undefined
           ? `<div style="font-size:11.5px;color:var(--ink-3);margin-top:2px">prazo de ${p.prazo_dias} dia(s)</div>`:""}
         ${p.observacao?`<div style="font-size:12px;color:var(--ink-2);margin-top:5px;line-height:1.5">${p.observacao}</div>`:""}
+        ${(()=>{ /* o cadastro tinha contato e prazo e NENHUM número: não
+            dava para saber quanto a clínica compra de cada um nem quanto
+            deve. Agora o cartão responde as duas coisas. */
+          const r = pode("valores") ? resumoParceiro(p.id) : null;
+          if(!r || !Number(r.pedidos)) return "";
+          return `<div style="font-size:11.5px;color:var(--ink-2);margin-top:6px">
+            ${r.pedidos} pedido(s) · comprado <b>${fmtBRL(r.comprado)}</b>
+            ${Number(r.em_aberto)>0.005?` · em aberto <b>${fmtBRL(r.em_aberto)}</b>`:" · tudo pago"}
+            ${r.proximo_vencimento?` · próximo vencimento ${fmtData(r.proximo_vencimento)}`:""}
+            ${Number(r.entregas_atrasadas)>0
+              ? ` · <span style="color:var(--crit)">${r.entregas_atrasadas} entrega(s) atrasada(s)</span>`:""}
+          </div>`; })()}
       </div>
       <div class="row" style="flex:0 0 auto;gap:6px;flex-wrap:wrap">
         ${zap?`<a class="minibtn" href="https://wa.me/55${zap}" target="_blank" rel="noopener">WhatsApp</a>`:""}
@@ -14218,6 +14942,12 @@ window.MD = {
   renderAll, renderHoje, renderCaixa, renderFinanceiro, htmlAgendaDeHoje,
   htmlPainel, htmlContas, htmlQuitar, htmlPlano, htmlPlanoResumo,
   htmlDespesas, htmlSaldoDoMes, htmlDespesasDoPainel, htmlFluxo,
+  htmlPedidosParceiro, htmlPedidoForm, htmlCartaoPedido, renderParceiros,
+  vencimentoPrevisto, pedidosFiltrados, itensDoPedido, resumoParceiro,
+  get parcAba(){ return parcAba; }, set parcAba(v){ parcAba = v; },
+  get pedFiltro(){ return pedFiltro; }, set pedFiltro(v){ pedFiltro = v; },
+  get pedForm(){ return pedForm; }, set pedForm(v){ pedForm = v; },
+  get pedItens(){ return pedItens; }, set pedItens(v){ pedItens = v; },
   despesasPainel, somaDespesas, fluxoMesPor, despesasFiltradas,
   get despAba(){ return despAba; }, set despAba(v){ despAba = v; },
   get despMes(){ return despMes; }, set despMes(v){ despMes = v; },
