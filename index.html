@@ -1203,6 +1203,8 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
 
       <div class="card" id="confBox" hidden></div>
 
+      <div id="agendaHojeBox"></div>
+
       <div class="sec-h"><h2>Atendimentos de hoje</h2><span class="hint" id="hojeCount"></span></div>
       <div class="list" id="hojeList"></div>
       </div>
@@ -1269,11 +1271,13 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
     <!-- ===== FINANCEIRO ===== -->
     <section class="screen" id="scr-financeiro">
       <div class="aba naoimprime" role="tablist" id="finAbas" style="margin-bottom:12px">
-        <button role="tab" aria-selected="true"  data-fin="fluxo">Fluxo de caixa</button>
+        <button role="tab" aria-selected="true"  data-fin="painel">Painel</button>
+        <button role="tab" aria-selected="false" data-fin="fluxo">Fluxo de caixa</button>
         <button role="tab" aria-selected="false" data-fin="recebidos">Recebimentos</button>
         <button role="tab" aria-selected="false" data-fin="producao">Produção</button>
         <button role="tab" aria-selected="false" data-fin="precos">Preços</button>
         <button role="tab" aria-selected="false" data-fin="taxas">Taxas da maquininha</button>
+        <button role="tab" aria-selected="false" data-fin="contas">Contas de recebimento</button>
       </div>
       <div id="finPainel"></div>
     </section>
@@ -1438,12 +1442,20 @@ const PERFIS = {
     valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
     lancaPagamento:true,
     precos:true, precoTodos:true, soMinhas:false},
+  /* O cliente foi explícito: "Perfil Dentista nao precisa ter acesso ao
+     financeiro, pagamento, recebimento. apenas as atividades
+     relacionadas ao paciente, atendimento, materiais, estoque e
+     procedimentos e anamnese." Então financeiro, caixa e projeção saem —
+     e saem TAMBÉM no banco (ATUALIZAR-FINANCEIRO-V2.sql), porque
+     esconder o botão não é controle de acesso.
+     precos fica: a tabela de preço do próprio trabalho é dele, e é com
+     ela que o orçamento do paciente é montado. */
   Dentista:{rotulo:"Dentista", desc:"Atende, edita prontuário e agenda",
-    telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
-    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:true, cadastro:true, admin:false,
+    telas:["hoje","pacientes","estoque","agenda","parceiros"],
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:false, cadastro:true, admin:false,
     custo:false,
     parceiros:true, parceirosEdita:true,
-    valores:false, lancaLote:false, caixa:true, projecao:true, relatorios:false,
+    valores:false, lancaLote:false, caixa:false, projecao:false, relatorios:false,
     /* lancaPagamento:false espelha a política do banco: só
        administrador, financeiro e secretaria inserem em pagamentos. O
        dentista vê o que foi pago nas cobranças dele e lança cobrança,
@@ -1466,10 +1478,15 @@ const PERFIS = {
     lancaPagamento:true,
     // lê a tabela de todos para cobrar certo, mas não tabela preço de ninguém
     precos:"ler", precoTodos:true, soMinhas:false},
-  Financeiro:{rotulo:"Financeiro", desc:"Faturamento e agenda",
+  Financeiro:{rotulo:"Financeiro", desc:"Faturamento, recebimento e agenda",
     /* financeiro VÊ os parceiros — é quem paga o laboratório — mas não
-       mexe no cadastro deles */
-    telas:["financeiro","agenda","parceiros"],
+       mexe no cadastro deles.
+       PACIENTES entrou por pedido do cliente: "deve ter acesso a ficha
+       do paciente para poder alterar, atualizar os dados de pagamento e
+       recebimento". Entra na ficha e no caixa do paciente, e NÃO no
+       prontuário: verClinico e prontuario seguem false, então o que é
+       clínico não abre para este perfil. */
+    telas:["financeiro","pacientes","agenda","parceiros"],
     atender:false, prontuario:false, verClinico:false, estoque:false, agenda:false, financeiro:true, cadastro:false, admin:false,
     custo:true,
     parceiros:true, parceirosEdita:false,
@@ -1522,7 +1539,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v58 · 15/11/2026";
+const VERSAO = "v59 · 18/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1590,7 +1607,8 @@ const DB = {
      essencial (valor, forma, paciente) nunca é acessório, então se o erro
      for em um desses a falha sobe como antes. */
   COLUNAS_OPCIONAIS: new Set(["maquininha_id","nota_fiscal","nota_numero",
-                              "bandeira","nsu","adquirente","observacao"]),
+                              "bandeira","nsu","adquirente","observacao",
+                              "conta_id","plano_descricao"]),
   async inserirTolerante(tabela, corpo, prefer){
     let atual = {...corpo};
     const tiradas = [];
@@ -2028,14 +2046,63 @@ const DB = {
      A secretária recebe 401/lista vazia nas duas últimas e a tela
      simplesmente não desenha aquele pedaço — nunca desenha zero. */
   async carregarCaixa(){
+    /* Engolir este erro em silêncio custou caro: quando a leitura falha,
+       a tela desenhava "nenhuma cobrança" — que é indistinguível de
+       "não tem cobrança nenhuma". Agora a falha fica registrada e a tela
+       diz que não conseguiu ler, em vez de mentir zero. */
+    S.falhouCaixa = null;
     try{
       const [cob, pag] = await Promise.all([
-        DB.rest("GET","cobrancas?select=id,paciente_id,atendimento_id,valor,vencimento,status,descricao,emitida_em&order=emitida_em.desc&limit=400"),
-        DB.rest("GET","pagamentos?select=id,cobranca_id,valor,forma_enum,parcelas,antecipado,adquirente,bandeira,maquininha_id,nsu,taxa,taxa_pct,liquido,pago_em,observacao&order=pago_em.desc&limit=600")
+        DB.rest("GET","cobrancas?select=id,paciente_id,atendimento_id,dentista_id,valor,"+
+          "vencimento,status,descricao,plano_descricao,emitida_em&order=emitida_em.desc&limit=400"),
+        DB.rest("GET","pagamentos?select=id,cobranca_id,valor,forma_enum,parcelas,antecipado,"+
+          "adquirente,bandeira,maquininha_id,conta_id,nsu,taxa,taxa_pct,liquido,pago_em,"+
+          "nota_fiscal,nota_numero,observacao&order=pago_em.desc&limit=600")
       ]);
       S.cobrancas = cob.map(c=>({...c, pac:UID.pacRev[c.paciente_id]||""}));
       S.pagamentos = pag;
-    }catch(e){ S.cobrancas=[]; S.pagamentos=[]; }
+    }catch(e){
+      S.cobrancas=[]; S.pagamentos=[];
+      S.falhouCaixa = (e && e.message) || "falha de rede";
+    }
+
+    /* o plano combinado com o paciente (500 no ato, 1.500 em 30 dias...) */
+    S.cobParcelas = null;
+    try{
+      S.cobParcelas = await DB.rest("GET","cobranca_parcelas?select=id,cobranca_id,numero,"+
+        "valor,vencimento,descricao,pagamento_id,quitada&order=cobranca_id,numero");
+    }catch(e){ S.cobParcelas = null; }
+
+    /* A visão analítica é a base do painel do financeiro: uma linha por
+       parcela a receber, já com dentista, sala, paciente, forma e conta.
+       Agregar no navegador é melhor do que ter quatro views que
+       envelhecem em quatro velocidades diferentes. */
+    S.analitico = null;
+    try{
+      S.analitico = await DB.rest("GET","vw_caixa_analitico?select=parcela_id,numero,total,"+
+        "valor_bruto,taxa,valor_liquido,previsao_credito,recebido_em,recebido,atrasada,"+
+        "pagamento_id,forma,pago_em,conta,cobranca_id,descricao,status,paciente_id,paciente,"+
+        "dentista_id,dentista,sala_id,sala&order=previsao_credito");
+    }catch(e){ S.analitico = null; }
+
+    /* O dado bancário COMPLETO só é lido por quem pode cadastrá-lo. Se a
+       RLS recusar, fica null e a tela diz que não tem acesso — nunca
+       desenha uma lista vazia, que seria lida como "não tem conta". */
+    S.contasFull = null;
+    try{
+      S.contasFull = await DB.rest("GET","contas_recebimento?select=id,apelido,titular_tipo,"+
+        "titular_nome,titular_doc,dono_id,banco_numero,banco_nome,agencia,conta,conta_tipo,"+
+        "pix_tipo,pix_chave,ativa,padrao,observacao&order=apelido");
+    }catch(e){ S.contasFull = null; }
+
+    /* contas de recebimento: SÓ o apelido vem por aqui. Banco, agência,
+       conta e chave PIX ficam na tabela, atrás da RLS, e nem chegam ao
+       navegador de quem está confirmando o pagamento. */
+    S.contas = null;
+    try{
+      S.contas = await DB.rest("GET","vw_contas_apelido?select=id,apelido,titular_tipo,"+
+        "dono_id,ativa,padrao&order=apelido");
+    }catch(e){ S.contas = null; }
 
     /* O NOME da maquininha não é segredo: a secretária precisa dele para
        lançar o pagamento. A TAXA é, e fica atrás de pode("projecao"). */
@@ -2098,6 +2165,15 @@ const DB = {
       maquininha_id: d.maquininha || null,
       nsu: d.nsu || null, observacao: d.obs || null,
       registrado_por: DB.meuId};
+    /* TRÊS CAMPOS QUE A TELA PEDIA E NINGUÉM MANDAVA.
+       A data do pagamento era digitada e descartada: o banco gravava
+       now() e um recebimento de ontem entrava como de hoje — e o fluxo
+       de caixa, que deriva de pago_em, saía do mês errado. A nota fiscal
+       tinha dois campos na tela e nenhum no corpo da requisição. */
+    if(d.dia) corpo.pago_em = d.dia + "T12:00:00-03:00";
+    corpo.nota_fiscal = !!d.nf;
+    if(d.nfNum) corpo.nota_numero = d.nfNum;
+    if(d.conta) corpo.conta_id = d.conta;
     if(d.taxa !== null && d.taxa !== undefined && d.taxa !== "") corpo.taxa = d.taxa;
     const r = await DB.inserirTolerante("pagamentos", corpo, "return=representation");
     return r[0].id;
@@ -2943,6 +3019,13 @@ const stockById=id=>S.estoque.find(e=>e.id===id);
 const pacById=id=>S.pacientes.find(p=>p.id===id);
 const hoje=new Date();
 const ISO=d=>d.toISOString().slice(0,10);
+/* escape de HTML para interpolar em template: nome de paciente com &,
+   apelido de conta com <, observação com aspas. Era feito à mão em cada
+   lugar, e onde faltou o texto saiu quebrado. */
+function esc(v){
+  return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
 const fmtData=iso=>{ if(!iso) return ""; const [y,m,d]=iso.split("-"); return `${d}/${m}/${y}`; };
 const norm=s=>(s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"");
 
@@ -6595,7 +6678,74 @@ $("#saveAtend").addEventListener("click", async ()=>{
 });
 
 /* ===================== telas =====================*/
+/* =====================================================================
+   A AGENDA DO DIA NA TELA INICIAL
+
+   A mini agenda da lateral existia, mas o CSS a escondia abaixo de
+   720px: `.mini-agenda{display:none}`. No iPhone, portanto, a tela que
+   abre depois do login não mostrava compromisso nenhum — e a conclusão
+   de quem usa, com razão, foi que a agenda não funcionava.
+
+   Então a agenda do dia passa a ser conteúdo da tela inicial, não
+   enfeite da lateral: mesma informação no celular e no computador.
+   O dentista vê só os dele; quem cuida da recepção vê todos.
+   ===================================================================== */
+/* SIT guarda cor de calendário (var(--...)), não classe de pílula. */
+const PILULA_SIT = {atendido:"ok", confirmado:"ok", agendado:"neutral",
+  encaixe:"neutral", bloqueado:"warn", atrasado:"warn",
+  cancelado:"crit", faltou:"crit", emergencia:"crit"};
+function pilulaDeSit(e){
+  if(atrasado(e)) return "warn";
+  return PILULA_SIT[e && e.status] || "neutral";
+}
+function htmlAgendaDeHoje(){
+  if(!usuario) return "";
+  const telas = PERFIS[usuario.perfil].telas || [];
+  if(!telas.includes("agenda") && !pode("agenda")) return "";
+  const iso = diaISO(hoje);
+  const meu = DB.meuId || usuario.id;
+  const soMeus = usuario.perfil === "Dentista";
+  const evs = (agenda.eventos||[])
+    .filter(e => diaISO(new Date(e.inicio)) === iso)
+    .filter(e => !soMeus || e.dentista_id === meu)
+    .sort((a,b)=> a.inicio < b.inicio ? -1 : 1);
+  const agora = minDe(new Date());
+  const z = n => String(n).padStart(2,"0");
+
+  const cab = '<div class="sec-h"><h2>Agenda de hoje</h2><span class="hint">'
+    + (agenda.carregando ? "carregando…"
+       : evs.length ? evs.length + " compromisso(s)" + (soMeus ? " seus" : "")
+       : "nada marcado") + '</span></div>';
+
+  if(agenda.carregando) return cab + '<div class="empty">carregando a agenda…</div>';
+  if(!evs.length) return cab + '<div class="empty">Nenhum compromisso marcado para hoje.'
+    + (pode("agenda") ? ' Use a tela <b>Agenda</b> para marcar.' : '') + '</div>';
+
+  return cab + '<div class="list">' + evs.map(e=>{
+    const sit = sitDeEv(e);
+    const ini = new Date(e.inicio), fim = new Date(e.fim);
+    const passou = minDe(fim) < agora;
+    const agora_ = minDe(ini) <= agora && minDe(fim) > agora;
+    return '<div class="item"' + (passou ? ' style="opacity:.55"' : "") + '>'
+      + '<div class="av mono" style="font-size:11px;line-height:1.1;text-align:center">'
+      + z(ini.getHours())+':'+z(ini.getMinutes())+'</div>'
+      + '<div class="main"><b>' + esc(e.paciente || e.titulo || sit.rot) + '</b>'
+      + '<small>' + esc(e.procedimento || e.titulo || "—")
+      + (e.sala ? ' · ' + esc(e.sala) : "")
+      + (!soMeus && e.dentista ? ' · ' + esc(e.dentista) : "")
+      + ' · ' + e.duracao_min + ' min</small>'
+      + (e.paciente_tel ? '<small style="color:var(--ink-3)" class="mono">'
+          + esc(fmtCel(e.paciente_tel)) + '</small>' : "")
+      + '</div>'
+      + '<div class="end">'
+      + (agora_ ? '<span class="pill warn">agora</span>' : "")
+      + '<span class="pill ' + pilulaDeSit(e) + '">' + sit.rot + '</span>'
+      + '</div></div>';
+  }).join("") + '</div>';
+}
+
 function renderHoje(){
+  const ab = $("#agendaHojeBox"); if(ab) ab.innerHTML = htmlAgendaDeHoje();
   const list=$("#hojeList"), hj=S.atendimentos.filter(a=>a.data===ISO(hoje));
   $("#hojeCount").textContent = hj.length ? hj.length+" registrado(s)" : "";
   list.innerHTML="";
@@ -6860,8 +7010,8 @@ function editarPaciente(id){
         <div class="field"><label for="edSexo">Sexo</label><select id="edSexo"><option value="">—</option>
           ${["Feminino","Masculino","Outro","Prefiro não informar"].map(o=>`<option ${p.sexo===o?"selected":""}>${o}</option>`).join("")}</select></div>
       </div>
-      <div class="field"><label for="edCpf">CPF</label><input id="edCpf" inputmode="numeric" class="mono" placeholder="000.000.000-00" value="${esc(p.cpf)}"></div>
-      <div class="field"><label for="edTel">Telefone / WhatsApp</label><input id="edTel" type="tel" placeholder="(11) 99999-0000" value="${esc(p.tel)}"></div>
+      <div class="field"><label for="edCpf">CPF</label><input id="edCpf" inputmode="numeric" class="mono" placeholder="000.000.000-00" maxlength="14" value="${esc(p.cpf)}"></div>
+      <div class="field"><label for="edTel">Celular / WhatsApp</label><input id="edTel" type="tel" inputmode="numeric" class="mono" placeholder="11 - 99999-9999" maxlength="17" value="${esc(p.tel)}"></div>
       <div class="field"><label for="edEmail">E-mail</label><input id="edEmail" type="email" placeholder="nome@email.com" value="${esc(p.email)}"></div>
       ${clinico?`<div class="field"><label for="edObs">Observação clínica</label><input id="edObs" value="${esc(p.obs)}"></div>`
                :`<div class="stage">A observação clínica é editada pelo dentista.</div>`}
@@ -6870,6 +7020,8 @@ function editarPaciente(id){
         <button class="btn" id="edCancelar">Cancelar</button></div>
     </div>`;
   if(novo) setTimeout(()=>{ const n=$("#edNome"); if(n) n.focus(); }, 60);
+  mascarar("#edCpf", fmtCpf);
+  mascarar("#edTel", fmtCel);
   $("#edCancelar").addEventListener("click", ()=>{
     if(novo){ pacAberto=null; renderPacientes(); } else abrirPaciente(id);
   });
@@ -6891,7 +7043,7 @@ function editarPaciente(id){
       S.pacientes.push(p);
     }
     p.nome=nome; p.nasc=nasc; p.sexo=$("#edSexo").value; p.cpf=fmtCpf(cpf);
-    p.tel=fmtTel($("#edTel").value); p.email=email;
+    p.tel=fmtCel($("#edTel").value); p.email=email;
     if(clinico) p.obs=$("#edObs").value.trim();
     save();
     (async ()=>{
@@ -8330,6 +8482,7 @@ const AG = {
 
 async function carregarAgenda(){
   agenda.carregando = true;
+  renderHoje();
   try{
     if(!agenda.salas.length){
       agenda.salas = await AG.salas();
@@ -8344,6 +8497,10 @@ async function carregarAgenda(){
   agenda.carregando = false;
   renderAgenda();
   renderMiniAgenda();
+  /* a agenda do dia agora é conteúdo da tela inicial: sem redesenhar
+     aqui, ela ficaria parada no "nenhum compromisso" do primeiro
+     instante, antes de a leitura do mês voltar */
+  renderHoje();
 }
 
 const eventosDoDia = iso => agenda.eventos
@@ -8901,6 +9058,12 @@ function abasConfigDe(pendentes){
      secretária agenda e cadastra, não define o que vai na bandeja. */
   if(pode("admin") || pode("atender")) abas.push(["procedimentos","Procedimentos"]);
   if(pode("admin")) abas.push(["pedidos","Pedidos"+(pendentes?" ("+pendentes+")":"")]);
+  /* O dentista saiu do Financeiro, mas o cliente pediu que ele possa
+     "identificar os seus meios de recebimento". As contas dele moram
+     aqui, então — e a RLS do banco cuida do resto: cada um vê as suas,
+     administrador e financeiro veem todas. */
+  if(pode("admin") || pode("atender") || pode("valores"))
+    abas.push(["recebimento","Recebimento"]);
   return abas;
 }
 
@@ -8921,6 +9084,7 @@ function renderConfig(){
 }
 
 function corpoConfig(){
+  if(cfg.aba==="recebimento"){ contasEm = "config"; return htmlContas(); }
   if(cfg.aba==="unidade") return htmlUnidade();
   if(cfg.aba==="salas")   return htmlSalas();
   if(cfg.aba==="equipe")  return htmlEquipe();
@@ -9296,8 +9460,10 @@ function htmlEquipe(){
             <input id="eqCro" value="${(u.cro||"").replace(/"/g,"&quot;")}" autocomplete="off"></div>
         </div>
         <div class="grid2">
-          <div class="field"><label for="eqTel">Telefone</label>
-            <input id="eqTel" value="${(u.telefone||"").replace(/"/g,"&quot;")}" autocomplete="off"></div>
+          <div class="field"><label for="eqTel">Celular</label>
+            <input id="eqTel" inputmode="numeric" class="mono" maxlength="17"
+              placeholder="11 - 99999-9999"
+              value="${fmtCel(u.telefone||"").replace(/"/g,"&quot;")}" autocomplete="off"></div>
           <div class="field"><label for="eqEsp">Especialidade</label>
             <input id="eqEsp" value="${(u.especialidade||"").replace(/"/g,"&quot;")}" autocomplete="off"></div>
         </div>
@@ -9485,6 +9651,7 @@ function levarAoFormulario(sel){
 
 function ligarConfig(){
   ligarProcedimentos();
+  if(cfg.aba === "recebimento") ligarContas();
   // unidade
   const cs = $("#cSalvar");
   if(cs) cs.addEventListener("click", async ()=>{
@@ -9813,17 +9980,429 @@ function destinoDoPagamento(pagId){
          "adquirente paga.";
 }
 
+/* =====================================================================
+   PAINEL DO FINANCEIRO
+
+   "criar um dashboard profissional da situação financeira e do fluxo de
+   caixa: por clínica, por dentista, por sala, por periodo desejado."
+
+   A base é vw_caixa_analitico: uma linha por parcela a receber, já com
+   dentista, sala, paciente, forma e conta. O recorte é feito aqui, no
+   navegador, e por isso trocar de filtro é instantâneo e não gasta
+   consulta nova.
+
+   Duas datas diferentes, e confundi-las dá dois números igualmente
+   defensáveis para a mesma pergunta:
+     · PREVISÃO DE CRÉDITO — quando o dinheiro entra na conta. É fluxo
+       de caixa. É o padrão, porque é o que paga a conta de luz.
+     · DATA DO PAGAMENTO — quando o paciente pagou. É faturamento.
+   ===================================================================== */
+let painel = null;
+
+function painelInicial(){
+  const h = new Date();
+  const de  = new Date(h.getFullYear(), h.getMonth(), 1);
+  const ate = new Date(h.getFullYear(), h.getMonth()+3, 0);
+  return {de:ISO(de), ate:ISO(ate), dent:"", sala:"", forma:"", conta:"", base:"previsao"};
+}
+
+function linhasPainel(){
+  if(!painel) painel = painelInicial();
+  const base = (S.analitico || []).slice();
+  const campoData = painel.base === "pagamento" ? "pago_em" : "previsao_credito";
+  return base.filter(x=>{
+    const d = String(x[campoData] || "").slice(0,10);
+    if(!d) return false;
+    if(painel.de  && d < painel.de)  return false;
+    if(painel.ate && d > painel.ate) return false;
+    if(painel.dent  && x.dentista_id !== painel.dent)  return false;
+    if(painel.sala  && String(x.sala_id||"") !== painel.sala) return false;
+    if(painel.forma && x.forma !== painel.forma) return false;
+    if(painel.conta && String(x.conta||"") !== painel.conta) return false;
+    return true;
+  });
+}
+
+function somaPainel(linhas){
+  const s = {bruto:0, taxas:0, liquido:0, recebido:0, areceber:0, atrasado:0,
+             parcelas:linhas.length, pacientes:new Set(), cobrancas:new Set()};
+  linhas.forEach(x=>{
+    s.bruto   += Number(x.valor_bruto||0);
+    s.taxas   += Number(x.taxa||0);
+    s.liquido += Number(x.valor_liquido||0);
+    if(x.recebido) s.recebido += Number(x.valor_liquido||0);
+    else { s.areceber += Number(x.valor_liquido||0);
+           if(x.atrasada) s.atrasado += Number(x.valor_liquido||0); }
+    if(x.paciente_id) s.pacientes.add(x.paciente_id);
+    if(x.cobranca_id) s.cobrancas.add(x.cobranca_id);
+  });
+  ["bruto","taxas","liquido","recebido","areceber","atrasado"].forEach(k=>s[k]=cent(s[k]));
+  s.pacientes = s.pacientes.size; s.cobrancas = s.cobrancas.size;
+  return s;
+}
+
+/* agrupa por uma chave e devolve já ordenado pelo líquido, decrescente:
+   a primeira linha da tabela é sempre a que mais pesa */
+function agruparPainel(linhas, chave, rotulo){
+  const m = new Map();
+  linhas.forEach(x=>{
+    const k = String(x[chave] == null ? "" : x[chave]);
+    if(!m.has(k)) m.set(k, {rot: rotulo(x) || "— não informado —", bruto:0, taxas:0,
+                            liquido:0, recebido:0, areceber:0, n:0});
+    const g = m.get(k);
+    g.bruto += Number(x.valor_bruto||0); g.taxas += Number(x.taxa||0);
+    g.liquido += Number(x.valor_liquido||0); g.n++;
+    if(x.recebido) g.recebido += Number(x.valor_liquido||0);
+    else g.areceber += Number(x.valor_liquido||0);
+  });
+  return Array.from(m.values()).map(g=>{
+    ["bruto","taxas","liquido","recebido","areceber"].forEach(k=>g[k]=cent(g[k]));
+    return g;
+  }).sort((a,b)=>b.liquido-a.liquido);
+}
+
+function tabelaPainel(titulo, grupos, colRot){
+  if(!grupos.length) return "";
+  const tot = grupos.reduce((a,g)=>({liquido:a.liquido+g.liquido}), {liquido:0});
+  return '<div class="sec-h" style="margin-top:14px"><h2>'+titulo+'</h2>'
+    + '<span class="hint">ordenado pelo líquido</span></div>'
+    + '<div class="rolar"><table class="tab-rel"><thead><tr>'
+    + '<th>'+colRot+'</th><th class="n">Parcelas</th><th class="n">Bruto</th>'
+    + '<th class="n">Taxas</th><th class="n">Líquido</th><th class="n">Recebido</th>'
+    + '<th class="n">A receber</th><th class="n">% do líquido</th></tr></thead><tbody>'
+    + grupos.map(g=>'<tr><td>'+esc(g.rot)+'</td><td class="n">'+g.n+'</td>'
+        + '<td class="n">'+fmtBRL(g.bruto)+'</td><td class="n">'+fmtBRL(g.taxas)+'</td>'
+        + '<td class="n"><b>'+fmtBRL(g.liquido)+'</b></td>'
+        + '<td class="n">'+fmtBRL(g.recebido)+'</td><td class="n">'+fmtBRL(g.areceber)+'</td>'
+        + '<td class="n">'+(tot.liquido ? (g.liquido/tot.liquido*100).toFixed(1)+"%" : "—")
+        + '</td></tr>').join("")
+    + '</tbody></table></div>';
+}
+
+function htmlPainel(){
+  if(!painel) painel = painelInicial();
+  if(S.analitico === null){
+    return '<div class="sec-h"><h2>Painel</h2></div>'
+      + '<div class="stage">Não consegui ler a visão analítica do caixa. '
+      + 'Se a atualização <b>ATUALIZAR-FINANCEIRO-V2.sql</b> ainda não foi rodada no banco, '
+      + 'é isso: a visão <code>vw_caixa_analitico</code> é criada por ela.</div>';
+  }
+  const linhas = linhasPainel();
+  const s = somaPainel(linhas);
+  const dents = Array.from(new Map((S.analitico||[]).filter(x=>x.dentista_id)
+    .map(x=>[x.dentista_id, x.dentista])).entries());
+  const salas = Array.from(new Map((S.analitico||[]).filter(x=>x.sala_id)
+    .map(x=>[String(x.sala_id), x.sala])).entries());
+  const formas = Array.from(new Set((S.analitico||[]).map(x=>x.forma).filter(Boolean)));
+  const contas = Array.from(new Set((S.analitico||[]).map(x=>x.conta).filter(Boolean)));
+  const nomeClinica = (cfg && cfg.clinica && cfg.clinica.nome) || "a clínica";
+
+  return '<div class="sec-h"><h2>Painel financeiro</h2>'
+    + '<span class="hint">' + esc(nomeClinica) + ' · '
+    + (painel.base==="pagamento" ? "por data do pagamento (faturamento)"
+                                 : "por previsão de crédito (fluxo de caixa)") + '</span></div>'
+
+    + '<div class="card"><div class="grid2">'
+    + '<div class="field"><label for="pnDe">De</label>'
+    + '<input id="pnDe" type="date" value="'+painel.de+'"></div>'
+    + '<div class="field"><label for="pnAte">Até</label>'
+    + '<input id="pnAte" type="date" value="'+painel.ate+'"></div>'
+    + '</div>'
+    + '<div class="rowbtns" style="margin-top:6px">'
+    + '<button class="minibtn" data-pnper="mes">Mês atual</button>'
+    + '<button class="minibtn" data-pnper="tri">3 meses</button>'
+    + '<button class="minibtn" data-pnper="ano">Ano</button>'
+    + '<button class="minibtn" data-pnper="tudo">Tudo</button></div>'
+    + '<div class="grid2" style="margin-top:8px">'
+    + '<div class="field"><label for="pnBase">Base da data</label><select id="pnBase">'
+    + '<option value="previsao"'+(painel.base==="previsao"?" selected":"")+'>Previsão de crédito — fluxo de caixa</option>'
+    + '<option value="pagamento"'+(painel.base==="pagamento"?" selected":"")+'>Data do pagamento — faturamento</option>'
+    + '</select></div>'
+    + '<div class="field"><label for="pnDent">Dentista</label><select id="pnDent">'
+    + '<option value="">todos</option>'
+    + dents.map(([id,nome])=>'<option value="'+id+'"'+(painel.dent===id?" selected":"")+'>'
+        + esc(nome||"—")+'</option>').join("")
+    + '</select></div></div>'
+    + '<div class="grid2" style="margin-top:8px">'
+    + '<div class="field"><label for="pnSala">Sala</label><select id="pnSala">'
+    + '<option value="">todas</option>'
+    + salas.map(([id,nome])=>'<option value="'+id+'"'+(painel.sala===id?" selected":"")+'>'
+        + esc(nome||"—")+'</option>').join("")
+    + '</select></div>'
+    + '<div class="field"><label for="pnForma">Forma</label><select id="pnForma">'
+    + '<option value="">todas</option>'
+    + formas.map(f=>'<option value="'+f+'"'+(painel.forma===f?" selected":"")+'>'
+        + (ROTULO_FORMA[f]||f)+'</option>').join("")
+    + '</select></div></div>'
+    + (contas.length>1 ? '<div class="field" style="margin-top:8px">'
+        + '<label for="pnConta">Conta de recebimento</label><select id="pnConta">'
+        + '<option value="">todas</option>'
+        + contas.map(c=>'<option value="'+esc(c)+'"'+(painel.conta===c?" selected":"")+'>'
+            + esc(c)+'</option>').join("") + '</select></div>' : "")
+    + '</div>'
+
+    + '<div class="tiles" style="margin-top:12px">'
+    + '<div class="tile"><b>'+fmtBRL(s.bruto)+'</b><span>bruto</span></div>'
+    + '<div class="tile"><b>'+fmtBRL(s.taxas)+'</b><span>taxas</span></div>'
+    + '<div class="tile"><b>'+fmtBRL(s.liquido)+'</b><span>líquido</span></div>'
+    + '<div class="tile ok"><b>'+fmtBRL(s.recebido)+'</b><span>já recebido</span></div>'
+    + '<div class="tile warn"><b>'+fmtBRL(s.areceber)+'</b><span>a receber</span></div>'
+    + (s.atrasado>0 ? '<div class="tile crit"><b>'+fmtBRL(s.atrasado)+'</b><span>atrasado</span></div>' : "")
+    + '</div>'
+    + '<div class="stage" style="margin-top:8px">'
+    + s.parcelas+' parcela(s) · '+s.cobrancas+' cobrança(s) · '+s.pacientes+' paciente(s)'
+    + (s.bruto ? ' · taxa média '+(s.taxas/s.bruto*100).toFixed(2)+'%' : "")
+    + '</div>'
+    + '<div class="rowbtns" style="margin-top:8px">'
+    + '<button class="minibtn" id="pnCsv">Baixar CSV do recorte</button>'
+    + '<button class="minibtn" id="pnImp">Imprimir</button></div>'
+
+    + (linhas.length ? "" : '<div class="empty" style="margin-top:12px">'
+        + 'Nada no período e nos filtros escolhidos.</div>')
+
+    + tabelaPainel("Por mês",
+        agruparPainel(linhas, painel.base==="pagamento" ? "pago_em" : "previsao_credito",
+          x=>nomeMes(String(x[painel.base==="pagamento"?"pago_em":"previsao_credito"]||"").slice(0,7)+"-01"))
+          .sort((a,b)=>a.rot.localeCompare(b.rot)), "Mês")
+    + tabelaPainel("Por dentista", agruparPainel(linhas,"dentista_id",x=>x.dentista), "Dentista")
+    + tabelaPainel("Por sala",     agruparPainel(linhas,"sala_id",x=>x.sala), "Sala")
+    + tabelaPainel("Por forma de pagamento",
+        agruparPainel(linhas,"forma",x=>ROTULO_FORMA[x.forma]||x.forma), "Forma")
+    + tabelaPainel("Por conta de recebimento",
+        agruparPainel(linhas,"conta",x=>x.conta), "Conta");
+}
+
+function ligarPainel(){
+  const mudar = (id, campo)=>{ const el=$("#"+id); if(el)
+    el.addEventListener("change", ()=>{ painel[campo]=el.value; renderFinanceiro(); }); };
+  mudar("pnDe","de"); mudar("pnAte","ate"); mudar("pnBase","base");
+  mudar("pnDent","dent"); mudar("pnSala","sala"); mudar("pnForma","forma");
+  mudar("pnConta","conta");
+  $$("#finPainel [data-pnper]").forEach(b=>b.addEventListener("click", ()=>{
+    const h = new Date(), q = b.dataset.pnper;
+    if(q==="mes"){ painel.de=ISO(new Date(h.getFullYear(),h.getMonth(),1));
+                   painel.ate=ISO(new Date(h.getFullYear(),h.getMonth()+1,0)); }
+    if(q==="tri"){ painel.de=ISO(new Date(h.getFullYear(),h.getMonth(),1));
+                   painel.ate=ISO(new Date(h.getFullYear(),h.getMonth()+3,0)); }
+    if(q==="ano"){ painel.de=h.getFullYear()+"-01-01"; painel.ate=h.getFullYear()+"-12-31"; }
+    if(q==="tudo"){ painel.de=""; painel.ate=""; }
+    renderFinanceiro();
+  }));
+  const imp=$("#pnImp"); if(imp) imp.addEventListener("click", ()=>window.print());
+  const csv=$("#pnCsv"); if(csv) csv.addEventListener("click", ()=>baixarCSV("painel-financeiro",
+    [["Paciente","Cobrança","Dentista","Sala","Forma","Conta","Parcela","Bruto","Taxa",
+      "Líquido","Previsão de crédito","Recebido em","Pago em"]].concat(
+      linhasPainel().map(x=>[x.paciente||"",x.descricao||"",x.dentista||"",x.sala||"",
+        ROTULO_FORMA[x.forma]||x.forma||"", x.conta||"", x.numero+"/"+x.total,
+        x.valor_bruto, x.taxa, x.valor_liquido, x.previsao_credito||"",
+        x.recebido_em||"", String(x.pago_em||"").slice(0,10)]))));
+}
+
+/* =====================================================================
+   CONTAS DE RECEBIMENTO
+
+   "um dentista pode ter mais de uma conta bancaria pessoa fisica (...)
+   criar tambem cadastro das contas bancarias do CNPJ (...) deixar
+   visual apenas um apelido criado pelo recebedor (...) para nao deixar
+   os dados expostos."
+
+   Por isso existem DUAS leituras no banco, e não uma com filtro na
+   tela: contas_recebimento tem o dado inteiro e só abre para
+   administrador, financeiro e o dentista dono; vw_contas_apelido
+   devolve exclusivamente o apelido, e é dela que sai o seletor na hora
+   de confirmar o pagamento. Esconder o número no HTML não esconderia
+   nada — ele estaria no navegador de quem opera o caixa.
+   ===================================================================== */
+let contaEdit = null;
+
+const TITULAR = {pf:"Pessoa física", pj:"CNPJ da clínica"};
+const PIX_TIPO = [["cpf","CPF"],["cnpj","CNPJ"],["celular","Celular"],
+                  ["email","E-mail"],["aleatoria","Chave aleatória"]];
+const CONTA_TIPO = [["corrente","Conta corrente"],["poupanca","Poupança"],
+                    ["pagamento","Conta de pagamento"]];
+
+/* mostra só o fim: confere que é a conta certa sem reexibir o número */
+function fim(v, n){
+  const t = String(v||"").trim();
+  if(!t) return "—";
+  return t.length <= n ? t : "••••" + t.slice(-n);
+}
+
+function htmlContas(){
+  if(S.contasFull === null){
+    return '<div class="sec-h"><h2>Contas de recebimento</h2></div>'
+      + '<div class="stage">Não consegui ler o cadastro de contas. '
+      + 'Se a atualização <b>ATUALIZAR-FINANCEIRO-V2.sql</b> ainda não foi rodada no banco, '
+      + 'é isso — a tabela <code>contas_recebimento</code> é criada por ela. '
+      + 'Se já foi rodada, o seu perfil não tem acesso a este cadastro.</div>';
+  }
+  const lista = (S.contasFull||[]).filter(c=>!(contaEdit && c.id===contaEdit.id));
+  const c = contaEdit;
+  return '<div class="sec-h"><h2>Contas de recebimento</h2>'
+    + '<span class="hint">na confirmação do pagamento aparece só o apelido</span></div>'
+    + '<div class="stage">O apelido é o que a equipe vê. Banco, agência, conta e chave PIX '
+    + 'ficam aqui, e só aparecem para administrador, financeiro e para o dentista dono '
+    + 'da própria conta.</div>'
+    + '<div class="row" style="margin-top:10px">'
+    + '<button class="btn primary" id="ctNova">+ Nova conta</button></div>'
+
+    + (c ? '<div class="card" style="margin-top:10px">'
+      + '<div class="eyebrow">'+(c.id?"Editar conta":"Nova conta de recebimento")+'</div>'
+      + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">'
+      + '<div class="field"><label for="ctApelido">Apelido — é o que a equipe vê</label>'
+      + '<input id="ctApelido" maxlength="40" placeholder="Itaú PF · PIX recepção · Conta da clínica" '
+      + 'value="'+esc(c.apelido||"")+'"></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="ctTitular">Titular</label><select id="ctTitular">'
+      + Object.entries(TITULAR).map(([v,r])=>'<option value="'+v+'"'
+          +((c.titular_tipo||"pf")===v?" selected":"")+'>'+r+'</option>').join("")
+      + '</select></div>'
+      + '<div class="field"><label for="ctDono">Dentista dono (conta PF)</label><select id="ctDono">'
+      + '<option value="">— da clínica —</option>'
+      + (S.usuarios||[]).filter(u=>u.perfil==="Dentista"||u.perfil==="Administrador")
+          .map(u=>'<option value="'+u.id+'"'+(c.dono_id===u.id?" selected":"")+'>'
+            + esc(u.nome)+'</option>').join("")
+      + '</select></div></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="ctTitNome">Nome do titular</label>'
+      + '<input id="ctTitNome" value="'+esc(c.titular_nome||"")+'"></div>'
+      + '<div class="field"><label for="ctTitDoc">CPF / CNPJ do titular</label>'
+      + '<input id="ctTitDoc" class="mono" value="'+esc(c.titular_doc||"")+'"></div></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="ctBancoNum">Número do banco</label>'
+      + '<input id="ctBancoNum" class="mono" inputmode="numeric" maxlength="4" placeholder="341" '
+      + 'value="'+esc(c.banco_numero||"")+'"></div>'
+      + '<div class="field"><label for="ctBancoNome">Banco</label>'
+      + '<input id="ctBancoNome" placeholder="Itaú" value="'+esc(c.banco_nome||"")+'"></div></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="ctAgencia">Agência</label>'
+      + '<input id="ctAgencia" class="mono" value="'+esc(c.agencia||"")+'"></div>'
+      + '<div class="field"><label for="ctConta">Conta (com dígito)</label>'
+      + '<input id="ctConta" class="mono" value="'+esc(c.conta||"")+'"></div></div>'
+      + '<div class="field"><label for="ctContaTipo">Tipo de conta</label><select id="ctContaTipo">'
+      + '<option value="">—</option>'
+      + CONTA_TIPO.map(([v,r])=>'<option value="'+v+'"'+(c.conta_tipo===v?" selected":"")+'>'
+          +r+'</option>').join("") + '</select></div>'
+      + '<div class="grid2">'
+      + '<div class="field"><label for="ctPixTipo">Tipo de chave PIX</label><select id="ctPixTipo">'
+      + '<option value="">— sem PIX —</option>'
+      + PIX_TIPO.map(([v,r])=>'<option value="'+v+'"'+(c.pix_tipo===v?" selected":"")+'>'
+          +r+'</option>').join("") + '</select></div>'
+      + '<div class="field"><label for="ctPixChave">Chave PIX</label>'
+      + '<input id="ctPixChave" class="mono" value="'+esc(c.pix_chave||"")+'"></div></div>'
+      + '<div class="field"><label for="ctObs">Observação</label>'
+      + '<input id="ctObs" value="'+esc(c.observacao||"")+'"></div>'
+      + '<label class="check"><input type="checkbox" id="ctAtiva"'
+      + (c.ativa===false?"":" checked")+'><span>Ativa — aparece na lista do caixa</span></label>'
+      + '<label class="check"><input type="checkbox" id="ctPadrao"'
+      + (c.padrao?" checked":"")+'><span>Conta padrão da clínica</span></label>'
+      + '<div class="row"><button class="btn primary" style="flex:1" id="ctSalvar">Salvar conta</button>'
+      + '<button class="btn" id="ctCancelar">Cancelar</button></div>'
+      + '</div></div>' : "")
+
+    + '<div class="list" style="margin-top:10px">'
+    + (lista.length ? lista.map(x=>'<div class="item">'
+        + '<div class="main"><b>'+esc(x.apelido)+'</b>'
+        + '<small>'+(TITULAR[x.titular_tipo]||x.titular_tipo)
+        + (x.banco_nome||x.banco_numero ? ' · '+esc(x.banco_nome||x.banco_numero) : "")
+        + (x.agencia ? ' · ag. '+esc(x.agencia) : "")
+        + (x.conta ? ' · conta '+fim(x.conta,3) : "")
+        + (x.pix_chave ? ' · PIX '+(x.pix_tipo||"")+' '+fim(x.pix_chave,4) : "")
+        + '</small>'
+        + (x.dono_id ? '<small style="color:var(--ink-3)">de '
+            + esc(((S.usuarios||[]).find(u=>u.id===x.dono_id)||{}).nome||"—")+'</small>' : "")
+        + '</div><div class="end">'
+        + (x.padrao ? '<span class="pill ok">padrão</span>' : "")
+        + (x.ativa===false ? '<span class="pill neutral">inativa</span>' : "")
+        + '<button class="minibtn" data-ctedit="'+x.id+'">Editar</button>'
+        + '</div></div>').join("")
+      : '<div class="empty">Nenhuma conta cadastrada. Sem conta, o pagamento é '
+        + 'registrado sem destino — e aí não se sabe em qual conta o dinheiro entrou.</div>')
+    + '</div>';
+}
+
+/* htmlContas() é montado tanto em Financeiro › Contas de recebimento
+   quanto em Configurações › Recebimento. Redesenhar sempre a mesma tela
+   deixaria metade dos botões sem efeito na outra. */
+let contasEm = "financeiro";   // "financeiro" | "config"
+function redesenharContas(){
+  if(contasEm === "config") renderConfig(); else renderFinanceiro();
+}
+function ligarContas(){
+  const nv=$("#ctNova");
+  if(nv) nv.addEventListener("click", ()=>{
+    contaEdit = {titular_tipo:"pf", ativa:true}; redesenharContas();
+    setTimeout(()=>{ const el=$("#ctApelido"); if(el){ el.focus();
+      el.scrollIntoView({block:"center", behavior:"smooth"}); } }, 60);
+  });
+  const cc=$("#ctCancelar");
+  if(cc) cc.addEventListener("click", ()=>{ contaEdit=null; redesenharContas(); });
+  $$("[data-ctedit]").forEach(b=>b.addEventListener("click", ()=>{
+    contaEdit = (S.contasFull||[]).find(x=>x.id===b.dataset.ctedit) || null;
+    redesenharContas();
+    setTimeout(()=>{ const el=$("#ctApelido"); if(el)
+      el.scrollIntoView({block:"center", behavior:"smooth"}); }, 60);
+  }));
+  const sv=$("#ctSalvar");
+  if(sv) sv.addEventListener("click", async ()=>{
+    const apelido = $("#ctApelido").value.trim();
+    if(!apelido){ toast("O apelido é obrigatório — é o que a equipe vai ver."); 
+      $("#ctApelido").focus(); return; }
+    const repetido = (S.contasFull||[]).some(x=>x.id!==(contaEdit&&contaEdit.id)
+      && String(x.apelido||"").toLowerCase()===apelido.toLowerCase());
+    if(repetido){ toast("Já existe uma conta com este apelido."); return; }
+    const pixTipo = $("#ctPixTipo").value || null;
+    const pixChave = $("#ctPixChave").value.trim() || null;
+    if(pixChave && !pixTipo){ toast("Escolha o tipo da chave PIX."); return; }
+    const d = {apelido, titular_tipo:$("#ctTitular").value,
+      titular_nome:$("#ctTitNome").value.trim()||null,
+      titular_doc:$("#ctTitDoc").value.trim()||null,
+      dono_id:$("#ctDono").value||null,
+      banco_numero:$("#ctBancoNum").value.trim()||null,
+      banco_nome:$("#ctBancoNome").value.trim()||null,
+      agencia:$("#ctAgencia").value.trim()||null,
+      conta:$("#ctConta").value.trim()||null,
+      conta_tipo:$("#ctContaTipo").value||null,
+      pix_tipo:pixTipo, pix_chave:pixChave,
+      observacao:$("#ctObs").value.trim()||null,
+      ativa:$("#ctAtiva").checked, padrao:$("#ctPadrao").checked};
+    const ok = await naNuvem(async ()=>{
+      if(contaEdit && contaEdit.id){
+        if(d.padrao) await DB.rest("PATCH","contas_recebimento?padrao=is.true&id=neq."
+          + contaEdit.id, {padrao:false});
+        await DB.rest("PATCH","contas_recebimento?id=eq."+contaEdit.id, d);
+      }else{
+        if(d.padrao) await DB.rest("PATCH","contas_recebimento?padrao=is.true", {padrao:false});
+        await DB.rest("POST","contas_recebimento", {clinica_id:DB.clinica,
+          criado_por:DB.meuId, ...d});
+      }
+      await DB.carregarCaixa();
+    }, "conta de recebimento");
+    if(!ok) return;
+    contaEdit = null; redesenharContas(); toast("Conta \""+apelido+"\" salva.");
+  });
+}
+
 function renderFinanceiro(){
   const alvo = $("#finPainel"); if(!alvo) return;
   $$("#finAbas button").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.fin===finAba)));
   const podeVer = pode("projecao");
   const verTaxa = pode("projecao") && !pode("soMinhas");   // taxa é da clínica, não do dentista
+  if(finAba==="painel" && !podeVer) finAba="producao";
+  if(finAba==="contas" && !podeVer) finAba="producao";
   if(finAba==="fluxo" && !podeVer) finAba="producao";
   if(finAba==="taxas" && !verTaxa) finAba="producao";
   if(finAba==="precos" && !pode("precos")) finAba="producao";
   const semFin   = (S.faltaSql||[]).some(f=>f.nome.includes("financeiro"));
   const semPreco = (S.faltaSql||[]).some(f=>f.nome.includes("preço"));
-  if(finAba==="fluxo")          alvo.innerHTML = semFin ? htmlFaltaSql("financeiro") : htmlFluxo();
+  if(finAba==="painel"){
+    alvo.innerHTML = htmlPainel(); ligarPainel();
+  }
+  else if(finAba==="contas"){
+    contasEm = "financeiro";
+    alvo.innerHTML = htmlContas(); ligarContas();
+  }
+  else if(finAba==="fluxo")     alvo.innerHTML = semFin ? htmlFaltaSql("financeiro") : htmlFluxo();
   else if(finAba==="recebidos") alvo.innerHTML = (semFin?htmlFaltaSql("financeiro"):"") + htmlRecebidos();
   else if(finAba==="precos"){
     if(semPreco){ alvo.innerHTML = htmlFaltaSql("preço"); }
@@ -9835,7 +10414,9 @@ function renderFinanceiro(){
   }
   else                      alvo.innerHTML = htmlProducao();
   $$("#finAbas button").forEach(b=>{
-    b.hidden = (b.dataset.fin==="fluxo" && !podeVer)
+    b.hidden = (b.dataset.fin==="painel" && !podeVer)
+            || (b.dataset.fin==="contas" && !podeVer)
+            || (b.dataset.fin==="fluxo" && !podeVer)
             || (b.dataset.fin==="taxas" && !verTaxa)
             || (b.dataset.fin==="precos" && !pode("precos"));
   });
@@ -10915,6 +11496,15 @@ const MAQUININHAS_SEED = [
 const maquininhas = () => (S.maquininhas && S.maquininhas.length) ? S.maquininhas
   : (MODO === "nuvem" ? [] : MAQUININHAS_SEED);
 const maquininhaPor = id => maquininhas().find(m=>m.id===id) || null;
+
+/* As contas que o caixa pode escolher. Vem de vw_contas_apelido, que
+   devolve SÓ o apelido — banco, agência, conta e chave PIX não chegam ao
+   navegador de quem está confirmando o pagamento. Sem semente: conta de
+   demonstração na tela de um consultório de verdade é dinheiro indo para
+   o lugar errado no relatório. */
+const contasAtivas = () => (S.contas||[]).filter(c=>c.ativa !== false);
+const contaPor = id => (S.contas||[]).find(c=>c.id===id) || null;
+const nomeConta = id => { const c = contaPor(id); return c ? c.apelido : null; };
 const nomeMaquina = id => { const m = maquininhaPor(id);
   return m ? m.apelido + (m.marca ? " · "+m.marca : "") : "tabela padrão"; };
 
@@ -11004,6 +11594,226 @@ function resumoPaciente(pacId){
           aReceber:cent(aReceber), cobrancas:cobs.length};
 }
 
+/* =====================================================================
+   QUITAÇÃO RÁPIDA E PLANO DE PAGAMENTO
+
+   "facilitar meio de confirmação do pagamento: hoje mesmo informando
+   que esta pago, o sistema nao sinaliza que ja esta pago (...) pode ser
+   acrescentado um botao de check + data do pagamento e forma do
+   pagamento."
+
+   Então são dois caminhos, não um:
+     · QUITAR — três campos e um check. É o caso comum: o paciente
+       pagou o que faltava, hoje, em dinheiro ou PIX. Não pede NSU,
+       bandeira, maquininha nem taxa, porque nada disso existe aí.
+     · REGISTRAR PAGAMENTO — o formulário inteiro, para cartão, com
+       parcelamento, maquininha e previsão de crédito.
+
+   E o plano de pagamento é coisa diferente das duas: é o COMBINADO com
+   o paciente (500 no ato, 1.500 em 30 dias, saldo no fim), que existe
+   antes de qualquer pagamento e é o que diz se há pendência hoje.
+   ===================================================================== */
+let quitarAberto = null;   // id da cobrança com a quitação rápida aberta
+let planoAberto  = null;   // id da cobrança com o plano aberto
+let planoRascunho = null;  // parcelas em edição
+
+const parcelasDoPlano = cobId =>
+  (S.cobParcelas||[]).filter(x=>x.cobranca_id===cobId)
+    .sort((a,b)=>a.numero-b.numero);
+
+function htmlQuitar(c, falta){
+  const formasSimples = FORMAS.filter(([v])=>v!=="credito");
+  return '<div style="flex-basis:100%;margin-top:8px" class="card">'
+    + '<div class="eyebrow">Confirmar pagamento de '+fmtBRL(falta)+'</div>'
+    + '<div class="grid2" style="margin-top:8px">'
+    + '<div class="field"><label for="qtData">Data do pagamento</label>'
+    + '<input id="qtData" type="date" value="'+hojeISO()+'" max="'+hojeISO()+'"></div>'
+    + '<div class="field"><label for="qtForma">Forma</label><select id="qtForma">'
+    + formasSimples.map(([v,r])=>'<option value="'+v+'"'+(v==="pix"?" selected":"")+'>'
+        +r+'</option>').join("")
+    + '</select></div></div>'
+    + (contasAtivas().length ? '<div class="field" style="margin-top:8px">'
+        + '<label for="qtConta">Em qual conta entrou</label><select id="qtConta">'
+        + '<option value="">— não informado —</option>'
+        + contasAtivas().map(ct=>'<option value="'+ct.id+'"'+(ct.padrao?" selected":"")+'>'
+            + esc(ct.apelido)+'</option>').join("") + '</select></div>' : "")
+    + '<div class="field" style="margin-top:8px"><label for="qtValor">Valor recebido</label>'
+    + '<input id="qtValor" inputmode="decimal" class="mono" value="'
+    + String(falta).replace(".",",")+'"></div>'
+    + '<div class="row" style="margin-top:10px">'
+    + '<button class="btn primary" style="flex:1" id="qtOk">✓ Está pago</button>'
+    + '<button class="btn" id="qtNao">Cancelar</button></div>'
+    + '<div class="stage" style="margin-top:8px">Cartão de crédito tem parcelamento, '
+    + 'maquininha e previsão de crédito — para isso use <b>Registrar pagamento</b>.</div>'
+    + '</div>';
+}
+
+function htmlPlano(c){
+  const linhas = planoRascunho || parcelasDoPlano(c.id).map(x=>({
+    numero:x.numero, valor:x.valor, vencimento:x.vencimento,
+    descricao:x.descricao, quitada:x.quitada}));
+  const soma = cent(linhas.reduce((a,x)=>a+Number(x.valor||0),0));
+  const dif = cent(Number(c.valor) - soma);
+  return '<div style="flex-basis:100%;margin-top:8px" class="card">'
+    + '<div class="eyebrow">Plano de pagamento — '+fmtBRL(c.valor)+' combinados</div>'
+    + '<div class="field" style="margin-top:8px"><label for="plDesc">Como ficou combinado</label>'
+    + '<input id="plDesc" placeholder="500 no ato, 1.500 em 30 dias, saldo no fim do tratamento" '
+    + 'value="'+esc(c.plano_descricao||"")+'"></div>'
+    + '<div class="rolar" style="margin-top:8px"><table class="tab-rel">'
+    + '<thead><tr><th>#</th><th class="n">Valor</th><th>Vencimento</th><th>Descrição</th>'
+    + '<th></th></tr></thead><tbody>'
+    + linhas.map((x,i)=>'<tr>'
+        + '<td>'+(i+1)+(x.quitada?' <span class="pill ok">paga</span>':'')+'</td>'
+        + '<td class="n"><input data-plv="'+i+'" class="mono" inputmode="decimal" '
+        + 'style="width:92px" value="'+String(x.valor||"").replace(".",",")+'"></td>'
+        + '<td><input data-pld="'+i+'" type="date" value="'+(x.vencimento||"")+'"></td>'
+        + '<td><input data-plt="'+i+'" value="'+esc(x.descricao||"")+'" '
+        + 'placeholder="entrada, 1ª parcela, saldo final"></td>'
+        + '<td><button class="minibtn" data-plx="'+i+'">remover</button></td></tr>').join("")
+    + '</tbody><tfoot><tr><td>Soma</td><td class="n"><b>'+fmtBRL(soma)+'</b></td>'
+    + '<td colspan="3">'+(Math.abs(dif)<0.005
+        ? 'fecha com o valor da cobrança'
+        : (dif>0 ? '<b>faltam '+fmtBRL(dif)+'</b> para fechar o combinado'
+                 : '<b>passa '+fmtBRL(-dif)+'</b> do valor da cobrança'))
+    + '</td></tr></tfoot></table></div>'
+    + '<div class="rowbtns" style="margin-top:8px">'
+    + '<button class="minibtn" id="plMais">+ parcela</button>'
+    + (Math.abs(dif)>0.005 && linhas.length
+        ? '<button class="minibtn" id="plSaldo">+ parcela com o saldo de '+fmtBRL(dif)+'</button>' : "")
+    + '</div>'
+    + '<div class="row" style="margin-top:10px">'
+    + '<button class="btn primary" style="flex:1" id="plSalvar">Salvar plano</button>'
+    + '<button class="btn" id="plCancelar">Cancelar</button></div>'
+    + '<div class="stage" style="margin-top:8px">O plano é o combinado com o paciente: '
+    + 'é por ele que se sabe se existe pendência <b>hoje</b>. Não é o parcelamento do '
+    + 'cartão, que a adquirente define e aparece em Fluxo de caixa.</div>'
+    + '</div>';
+}
+
+function htmlPlanoResumo(c){
+  const ps = parcelasDoPlano(c.id);
+  if(!ps.length) return "";
+  return '<div style="flex-basis:100%;margin-top:6px">'
+    + (c.plano_descricao ? '<small style="color:var(--ink-2)">'
+        + esc(c.plano_descricao)+'</small>' : "")
+    + '<div class="rolar"><table class="tab-rel">'
+    + '<thead><tr><th>#</th><th class="n">Valor</th><th>Vencimento</th>'
+    + '<th>Descrição</th><th>Situação</th></tr></thead><tbody>'
+    + ps.map(x=>{
+        const atrasada = !x.quitada && x.vencimento && x.vencimento < hojeISO();
+        return '<tr><td>'+x.numero+'</td><td class="n">'+fmtBRL(x.valor)+'</td>'
+          + '<td>'+(x.vencimento?fmtData(x.vencimento):"—")+'</td>'
+          + '<td>'+esc(x.descricao||"—")+'</td>'
+          + '<td><span class="pill '+(x.quitada?"ok":atrasada?"crit":"neutral")+'">'
+          + (x.quitada?"paga":atrasada?"atrasada":"a vencer")+'</span></td></tr>';
+      }).join("")
+    + '</tbody></table></div></div>';
+}
+
+function ligarQuitacao(pacId, box){
+  box.querySelectorAll("button[data-quitar]").forEach(b=>b.addEventListener("click", ()=>{
+    quitarAberto = quitarAberto === b.dataset.quitar ? null : b.dataset.quitar;
+    planoAberto = null; renderCaixa(pacId);
+  }));
+  box.querySelectorAll("button[data-plano]").forEach(b=>b.addEventListener("click", ()=>{
+    planoAberto = planoAberto === b.dataset.plano ? null : b.dataset.plano;
+    planoRascunho = null; quitarAberto = null; renderCaixa(pacId);
+  }));
+
+  const nao=$("#qtNao");
+  if(nao) nao.addEventListener("click", ()=>{ quitarAberto=null; renderCaixa(pacId); });
+  const ok=$("#qtOk");
+  if(ok) ok.addEventListener("click", async ()=>{
+    const cobId = quitarAberto;
+    const v = numBR($("#qtValor").value);
+    if(!(v>0)){ toast("Informe o valor recebido."); $("#qtValor").focus(); return; }
+    const d = {cobranca:cobId, valor:v, forma:$("#qtForma").value, parcelas:1,
+      antecipado:false, bandeira:null, maquininha:null, nf:false, nfNum:null,
+      nsu:null, taxa:null, obs:null, dia:$("#qtData").value,
+      conta: $("#qtConta") ? ($("#qtConta").value||null) : null};
+    if(MODO==="nuvem"){
+      const bom = await naNuvem(async ()=>{
+        await DB.gravarPagamento(d); await DB.carregarCaixa();
+      }, "pagamento");
+      if(!bom) return;
+    }else{
+      S.pagamentos = S.pagamentos||[];
+      S.pagamentos.push({id:"pg"+Date.now(), cobranca_id:cobId, valor:v,
+        forma_enum:d.forma, parcelas:1, taxa:0, liquido:v,
+        conta_id:d.conta, pago_em:d.dia+"T12:00:00"});
+      save();
+    }
+    quitarAberto = null; renderCaixa(pacId); renderFinanceiro();
+    toast("Pagamento de "+fmtBRL(v)+" confirmado em "+fmtData(d.dia)+".");
+  });
+
+  /* plano */
+  const lerRascunho = ()=>{
+    const n = box.querySelectorAll("input[data-plv]").length;
+    const r = [];
+    for(let i=0;i<n;i++){
+      r.push({numero:i+1,
+        valor: numBR((box.querySelector('input[data-plv="'+i+'"]')||{}).value||""),
+        vencimento: (box.querySelector('input[data-pld="'+i+'"]')||{}).value||null,
+        descricao: ((box.querySelector('input[data-plt="'+i+'"]')||{}).value||"").trim()||null});
+    }
+    return r;
+  };
+  const mais=$("#plMais");
+  if(mais) mais.addEventListener("click", ()=>{
+    planoRascunho = lerRascunho().concat([{numero:0, valor:0, vencimento:null, descricao:null}]);
+    renderCaixa(pacId);
+  });
+  const saldo=$("#plSaldo");
+  if(saldo) saldo.addEventListener("click", ()=>{
+    const cob = (S.cobrancas||[]).find(x=>x.id===planoAberto);
+    const atual = lerRascunho();
+    const dif = cent(Number(cob.valor) - atual.reduce((a,x)=>a+Number(x.valor||0),0));
+    planoRascunho = atual.concat([{numero:0, valor:dif>0?dif:0,
+      vencimento:null, descricao:"saldo"}]);
+    renderCaixa(pacId);
+  });
+  box.querySelectorAll("button[data-plx]").forEach(b=>b.addEventListener("click", ()=>{
+    const i = Number(b.dataset.plx);
+    planoRascunho = lerRascunho().filter((_,k)=>k!==i);
+    renderCaixa(pacId);
+  }));
+  const plc=$("#plCancelar");
+  if(plc) plc.addEventListener("click", ()=>{
+    planoAberto=null; planoRascunho=null; renderCaixa(pacId); });
+  const pls=$("#plSalvar");
+  if(pls) pls.addEventListener("click", async ()=>{
+    const cobId = planoAberto;
+    const linhas = lerRascunho().filter(x=>x.valor>0);
+    const desc = $("#plDesc").value.trim() || null;
+    if(!linhas.length && !desc){ toast("Informe ao menos uma parcela ou descreva o combinado."); return; }
+    if(MODO==="nuvem"){
+      const bom = await naNuvem(async ()=>{
+        await DB.rest("PATCH","cobrancas?id=eq."+cobId, {plano_descricao:desc});
+        /* apagar e reescrever o plano inteiro é de propósito: diff de
+           plano com 4 parcelas não paga o que custa, e a auditoria
+           guarda cada versão com quem mexeu e quando */
+        await DB.rest("DELETE","cobranca_parcelas?cobranca_id=eq."+cobId
+          + "&pagamento_id=is.null");
+        if(linhas.length) await DB.rest("POST","cobranca_parcelas",
+          linhas.map((x,i)=>({cobranca_id:cobId, numero:i+1, valor:x.valor,
+            vencimento:x.vencimento, descricao:x.descricao, criado_por:DB.meuId})));
+        await DB.carregarCaixa();
+      }, "plano de pagamento");
+      if(!bom) return;
+    }else{
+      S.cobParcelas = (S.cobParcelas||[]).filter(x=>x.cobranca_id!==cobId)
+        .concat(linhas.map((x,i)=>({id:"cp"+Date.now()+i, cobranca_id:cobId,
+          numero:i+1, valor:x.valor, vencimento:x.vencimento,
+          descricao:x.descricao, quitada:false})));
+      const cob=(S.cobrancas||[]).find(x=>x.id===cobId); if(cob) cob.plano_descricao=desc;
+      save();
+    }
+    planoAberto=null; planoRascunho=null; renderCaixa(pacId);
+    toast("Plano de pagamento salvo.");
+  });
+}
+
 let caixaForm = null;    // {cobranca} quando o formulário está aberto
 let compAberta = null;   // id da cobrança com a composição expandida
 
@@ -11019,6 +11829,14 @@ function renderCaixa(pacId){
   const r = resumoPaciente(pacId);
   const cobs = cobrancasDe(pacId);
   const ver = pode("projecao");
+  /* "nenhuma cobrança" e "não consegui ler as cobranças" são a mesma
+     tela e significados opostos. Um faz a secretária lançar de novo; o
+     outro faz o dentista achar que o paciente não deve nada. */
+  const avisoLeitura = S.falhouCaixa
+    ? '<div class="stage" style="margin-top:8px"><b>Não consegui ler o caixa deste '
+      + 'paciente no banco.</b> O que aparece abaixo pode estar incompleto. '
+      + 'Detalhe técnico: ' + esc(S.falhouCaixa) + '</div>'
+    : "";
 
   box.innerHTML = `
     <div class="sec-h" style="margin-top:14px"><h2>Pagamentos</h2>
@@ -11036,6 +11854,7 @@ function renderCaixa(pacId){
     ${cobs.length&&!pode("lancaPagamento")?`<div class="stage" style="margin-top:8px">
       Recebimento é lançado pelo caixa — secretaria, financeiro ou administrador.
       Aqui você acompanha o que já foi pago nas suas cobranças.</div>`:""}
+    ${avisoLeitura}
     <div class="card" id="caixaCard" hidden></div>
     <div class="list" style="margin-top:10px">${cobs.map(c=>{
       const pgs = pagamentosDe(c.id);
@@ -11071,8 +11890,17 @@ function renderCaixa(pacId){
           </table></div></div>`:""}
         ${pgs.length?`<div style="flex-basis:100%;margin-top:6px;padding-left:2px">
           ${pgs.map(pg=>htmlPagamento(pg, ver)).join("")}</div>`:""}
-        ${falta>0?`<div class="rowbtns" style="flex-basis:100%">
-          <button class="minibtn" data-pagar="${c.id}">Receber ${fmtBRL(falta)}</button></div>`:""}
+        ${htmlPlanoResumo(c)}
+        ${pode("lancaPagamento")?`<div class="rowbtns" style="flex-basis:100%">
+          ${falta>0?`<button class="minibtn" data-quitar="${c.id}">✓ Quitar ${
+            fmtBRL(falta)}</button>
+          <button class="minibtn" data-pagar="${c.id}">Registrar pagamento</button>`:""}
+          <button class="minibtn" data-plano="${c.id}">${
+            parcelasDoPlano(c.id).length?"Editar plano":"Plano de pagamento"}</button>
+        </div>`:(falta>0?`<div class="rowbtns" style="flex-basis:100%">
+          <button class="minibtn" data-pagar="${c.id}">Receber ${fmtBRL(falta)}</button></div>`:"")}
+        ${quitarAberto===c.id && falta>0 ? htmlQuitar(c, falta) : ""}
+        ${planoAberto===c.id ? htmlPlano(c) : ""}
       </div>`;
     }).join("") || '<div class="empty">Nenhuma cobrança lançada para este paciente.</div>'}</div>`;
 
@@ -11080,6 +11908,7 @@ function renderCaixa(pacId){
   const bp=$("#novoPagBtn"); if(bp) bp.addEventListener("click", ()=>formPagamento(pacId, cobs[0].id));
   box.querySelectorAll("button[data-pagar]").forEach(b=>
     b.addEventListener("click", ()=>formPagamento(pacId, b.dataset.pagar)));
+  ligarQuitacao(pacId, box);
   box.querySelectorAll("button[data-comp]").forEach(b=>b.addEventListener("click", ()=>{
     compAberta = compAberta === b.dataset.comp ? null : b.dataset.comp;
     renderCaixa(pacId);
@@ -11099,6 +11928,8 @@ function htmlPagamento(pg, ver){
       <span class="pill neutral">${ROTULO_FORMA[pg.forma_enum]||pg.forma_enum||"—"}${
         n>1?` ${n}×`:""}${pg.antecipado?" · antecipado":""}</span>
       ${pg.bandeira?`<span class="pill neutral">${pg.bandeira}</span>`:""}
+      ${nomeConta(pg.conta_id)?`<span class="pill neutral">${esc(nomeConta(pg.conta_id))}</span>`:""}
+      ${pg.nota_fiscal?`<span class="pill ok">NF${pg.nota_numero?" "+esc(pg.nota_numero):""}</span>`:""}
       <span class="mono" style="font-size:11px;color:var(--ink-3)">${fmtData((pg.pago_em||"").slice(0,10))}${
         pg.nsu?" · NSU "+pg.nsu:""}</span>
     </div>
@@ -11195,6 +12026,11 @@ function formPagamento(pacId, cobId){
             `<option value="${m.id}"${m.padrao?" selected":""}>${m.apelido}${
               m.marca?" · "+m.marca:""}${m.modelo?" · "+m.modelo:""}</option>`).join("")}</select></div>
       </div>
+      ${contasAtivas().length?`<div class="field"><label for="pgConta">Em qual conta entrou</label>
+        <select id="pgConta">
+          <option value="">— não informado —</option>
+          ${contasAtivas().map(ct=>`<option value="${ct.id}"${ct.padrao?" selected":""}>${
+            esc(ct.apelido)}</option>`).join("")}</select></div>`:""}
       <!-- Nota fiscal: pedido do Dr. Leonardo. Fica junto do pagamento
            porque é ali que se sabe se emitiu, não depois. -->
       <div class="grid2">
@@ -11291,6 +12127,7 @@ function formPagamento(pacId, cobId){
       nfNum: $("#pgNFNum") ? ($("#pgNFNum").value.trim()||null) : null,
       nsu: $("#pgNsu").value.trim()||null,
       taxa: $("#pgTaxa") && $("#pgTaxa").value.trim()!=="" ? numBR($("#pgTaxa").value) : null,
+      conta: $("#pgConta") ? ($("#pgConta").value||null) : null,
       obs: $("#pgObs").value.trim()||null, dia:$("#pgData").value};
     let novoPagId = null;
     if(MODO==="nuvem"){
@@ -12555,7 +13392,20 @@ window.MD = {
   htmlEquipe, cfg(){ return cfg; }, CFG, renderConfig, abrirConfig,
   get equipeEdit(){ return equipeEdit; }, set equipeEdit(v){ equipeEdit = v; },
   get usuario(){ return usuario; },
+  /* O teste precisa trocar de perfil para conferir, perfil por perfil,
+     o que cada tela oferece. Trocar aqui NÃO dá acesso a dado nenhum: o
+     que o navegador consegue ler é decidido pelo RLS, com o token de
+     quem entrou, e o token não muda por isso. O que muda é só quais
+     botões a tela desenha. */
+  set usuario(v){ usuario = v; },
   get modo(){ return MODO; },
+  renderAll, renderHoje, renderCaixa, renderFinanceiro, htmlAgendaDeHoje,
+  htmlPainel, htmlContas, htmlQuitar, htmlPlano, htmlPlanoResumo,
+  fmtCel, fmtCpf, parcelasDoPlano, contasAtivas,
+  get painel(){ return painel; }, set painel(v){ painel = v; },
+  get finAba(){ return finAba; }, set finAba(v){ finAba = v; },
+  get quitarAberto(){ return quitarAberto; }, set quitarAberto(v){ quitarAberto = v; },
+  get planoAberto(){ return planoAberto; }, set planoAberto(v){ planoAberto = v; },
   projetar, taxaPara, resumoPaciente, fluxoPorMes, abrirPaciente, numBR, hojeISO, cent,
   valorHoraDe, precoMaterial, precoPelaMargem, composicaoLocal, cobrancasVisiveis,
   abrirConferencia, conferencia(){ return conf; },
@@ -12637,11 +13487,23 @@ function fmtCpf(v){
 /* celular: DDD de 11 a 99 e nono dígito — fixo não serve para contato
    de plantão, que é o motivo de o campo existir */
 function celularValido(v){ return /^[1-9][1-9]9[0-9]{8}$/.test(soDigitos(v)); }
+/* Um formato de celular para o sistema inteiro, no padrão que o cliente
+   pediu: XX - XXXXX-XXXX. Ter dois formatos conviventes é o que faz a
+   mesma pessoa parecer duas no cadastro. */
 function fmtCel(v){
   const d = soDigitos(v).slice(0,11);
-  if(d.length <= 2) return d.length ? "("+d : "";
-  if(d.length <= 7) return "("+d.slice(0,2)+") "+d.slice(2);
-  return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
+  if(d.length <= 2) return d;
+  if(d.length <= 7) return d.slice(0,2)+" - "+d.slice(2);
+  return d.slice(0,2)+" - "+d.slice(2,7)+"-"+d.slice(7);
+}
+/* liga a máscara ao campo: formata enquanto digita e mantém o cursor no
+   fim, que é onde ele está em 99% das digitações de telefone e CPF */
+function mascarar(sel, fn){
+  const el = (typeof sel === "string") ? $(sel) : sel;
+  if(!el) return;
+  el.value = fn(el.value);
+  el.addEventListener("input", ()=>{ el.value = fn(el.value); });
+  el.addEventListener("blur",  ()=>{ el.value = fn(el.value); });
 }
 function nascimentoValido(v){
   if(!v) return false;
