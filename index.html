@@ -1680,7 +1680,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v68 · 19/11/2026";
+const VERSAO = "v69 · 19/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2333,7 +2333,10 @@ const DB = {
     const r = await DB.rest("POST","cobrancas", {
       clinica_id: DB.clinica, paciente_id: pid,
       atendimento_id: d.atd ? (UID.atd[d.atd]||null) : null,
-      valor: d.valor, vencimento: d.venc || null, descricao: d.descricao || null
+      valor: d.valor, vencimento: d.venc || null, descricao: d.descricao || null,
+      /* nulo é legítimo: o gatilho dono_da_cobranca() completa a partir
+         do atendimento, de quem lançou, ou do dentista único da unidade */
+      dentista_id: d.dentista || null
     }, "return=representation");
     return r[0].id;
   },
@@ -13908,7 +13911,23 @@ function dadosNF(pgId){
   const at  = cob.atendimento_id
     ? (S.atendimentos||[]).find(a=>UID.atd[a.id]===cob.atendimento_id) : null;
   const cl  = (typeof cfg!=="undefined" && cfg.clinica) || {};
-  const dent = (S.usuarios||[]).find(u=>u.id===cob.dentista_id) || {};
+  /* O CRO estava cadastrado e a nota dizia que faltava. A causa não era
+     o cadastro: era a COBRANÇA, lançada sem dentista responsável — o
+     administrador lança, o gatilho do banco só sabia herdar de
+     atendimento ou de dentista que lança, e a cobrança nascia órfã.
+     Aqui vai a mesma regra que o banco passou a aplicar: clínica com um
+     dentista ativo só não tem ambiguidade. */
+  const atendem = (S.usuarios||[]).filter(u=>temTabelaPropria(u) && u.ativo!==false);
+  let dent = cob.dentista_id ? ((S.usuarios||[]).find(u=>u.id===cob.dentista_id)||null) : null;
+  let dentOrigem = dent ? "cobranca" : "";
+  if(!dent && atendem.length === 1){ dent = atendem[0]; dentOrigem = "unico"; }
+  dent = dent || {};
+  /* CRO: o do profissional é o que o convênio quer. Na falta dele, o da
+     unidade é melhor do que nota sem CRO nenhum — e a tela diz qual é. */
+  let cro = croDe(dent.id), croOrigem = cro ? "dentista" : "";
+  if(!cro && String(cl.cro_clinica||"").trim()){
+    cro = String(cl.cro_clinica).trim(); croOrigem = "clinica";
+  }
   const regiao = at && at.regiao && at.regiao !== "—" ? at.regiao : "";
   const servico = [cob.descricao || (at && at.proc) || "Serviço odontológico",
                    regiao ? "região "+regiao : ""].filter(Boolean).join(" — ");
@@ -13922,7 +13941,9 @@ function dadosNF(pgId){
     cpf: pac.cpf || "",
     servico: servico,
     profissional: dent.nome || "",
-    cro: croDe(cob.dentista_id),
+    dentOrigem: dentOrigem,
+    cro: cro,
+    croOrigem: croOrigem,
     data: (pg.pago_em||"").slice(0,10),
     valor: Number(pg.valor||0),
     numero: pg.nota_numero || "",
@@ -13954,7 +13975,14 @@ function faltasNF(d){
   if(!d.cpf)       f.push("<b>CPF do paciente</b> — sem ele o convênio recusa o reembolso. Complete na ficha.");
   if(!d.cnpj)      f.push("<b>CNPJ da clínica</b> — complete em Configurações.");
   if(!d.prestador) f.push("<b>Razão social da clínica</b> — complete em Configurações.");
-  if(!d.cro)       f.push("<b>CRO do profissional</b> — complete no cadastro da equipe.");
+  /* A mensagem antiga mandava completar o cadastro da equipe mesmo
+     quando o CRO ESTAVA lá. Mandar a pessoa arrumar o que já está certo
+     é pior do que não avisar: ela arruma, volta, e o aviso continua. */
+  if(!d.profissional)
+    f.push("<b>Dentista da cobrança</b> — esta cobrança foi lançada sem dentista responsável, "
+         + "e é dele que sai o CRO. Lance a próxima escolhendo o profissional.");
+  else if(!d.cro)
+    f.push("<b>CRO de "+esc(d.profissional)+"</b> — não está no cadastro da equipe nem na unidade.");
   return f;
 }
 
@@ -13991,6 +14019,11 @@ function renderNF(){
     <pre class="nf-bloco" id="nfTexto">${esc(textoNF(d))}</pre>
     ${faltas.length?`<div class="nf-falta">Confira antes de emitir:<ul style="margin:6px 0 0 16px">
       ${faltas.map(x=>`<li>${x}</li>`).join("")}</ul></div>`:""}
+    ${d.croOrigem==="clinica"?`<div class="nf-falta">O CRO acima é o <b>da unidade</b>:
+      ${esc(d.profissional||"o profissional")} está sem CRO no cadastro da equipe. Alguns
+      convênios pedem o CRO de quem atendeu.</div>`:""}
+    ${d.dentOrigem==="unico"?`<div class="hint" style="margin-top:8px">Esta cobrança foi lançada
+      sem dentista; usei <b>${esc(d.profissional)}</b>, o único que atende nesta unidade.</div>`:""}
     <div class="row" style="margin-top:12px">
       <button class="btn primary" style="flex:1" id="nfCopiar">Copiar os dados</button>
       <a class="btn" id="nfAbrir" href="${NFSE_EMISSOR}" target="_blank" rel="noopener">Abrir o Emissor Nacional</a>
@@ -14182,6 +14215,10 @@ async function gerarDmed(){
 function formCobranca(pacId){
   const c = $("#caixaCard"); c.hidden=false;
   const hist = S.atendimentos.filter(a=>a.pac===pacId).sort((a,b)=>a.data<b.data?1:-1);
+  /* A cobrança precisa saber de quem é: é de lá que a nota fiscal tira o
+     CRO, e o relatório de produção, o dentista. Com um dentista só não
+     se pergunta nada — o banco resolve; com mais de um, pergunta-se. */
+  const dents = (S.usuarios||[]).filter(u=>temTabelaPropria(u) && u.ativo!==false);
   c.innerHTML = `
     <div class="eyebrow">Nova cobrança</div>
     <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
@@ -14196,6 +14233,9 @@ function formCobranca(pacId){
       ${hist.length?`<div class="field"><label for="cbAtd">Vincular ao atendimento</label>
         <select id="cbAtd"><option value="">— nenhum —</option>
         ${hist.map(a=>`<option value="${a.id}">${fmtData(a.data)} · ${a.proc}</option>`).join("")}</select></div>`:""}
+      ${dents.length>1?`<div class="field"><label for="cbDent">Dentista responsável</label>
+        <select id="cbDent">${dents.map(u=>`<option value="${u.id}"${
+          u.id===meuId()?" selected":""}>${esc(u.nome)}</option>`).join("")}</select></div>`:""}
       <div class="row"><button class="btn primary" style="flex:1" id="cbSalvar">Lançar cobrança</button>
         <button class="btn" id="cbCancelar">Cancelar</button></div>
     </div>`;
@@ -14205,7 +14245,9 @@ function formCobranca(pacId){
     if(!(valor>0)){ toast("Informe o valor da cobrança."); $("#cbValor").focus(); return; }
     const d = {pac:pacId, valor, venc:$("#cbVenc").value||null,
       descricao:$("#cbDesc").value.trim()||"Cobrança",
-      atd: $("#cbAtd") ? ($("#cbAtd").value||null) : null};
+      atd: $("#cbAtd") ? ($("#cbAtd").value||null) : null,
+      dentista: $("#cbDent") ? ($("#cbDent").value||null)
+              : (dents.length===1 ? dents[0].id : null)};
     if(MODO==="nuvem"){
       const ok = await naNuvem(async ()=>{
         await DB.gravarCobranca(d); await DB.carregarCaixa();
@@ -14214,8 +14256,8 @@ function formCobranca(pacId){
     }else{
       S.cobrancas = S.cobrancas||[];
       S.cobrancas.push({id:"c"+Date.now(), pac:pacId, valor, vencimento:d.venc,
-        descricao:d.descricao, atendimento_id:d.atd, status:"aberta",
-        emitida_em:new Date().toISOString()});
+        descricao:d.descricao, atendimento_id:d.atd, dentista_id:d.dentista,
+        status:"aberta", emitida_em:new Date().toISOString()});
       save();
     }
     c.hidden=true; renderCaixa(pacId); toast("Cobrança de "+fmtBRL(valor)+" lançada.");
