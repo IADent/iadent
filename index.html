@@ -281,13 +281,26 @@ a{color:var(--accent)}
 .od-hist{font-size:11px;color:var(--ink-3);line-height:1.75;margin-top:4px}
 
 /* a prévia na ficha: clicável, com a chamada por cima */
-.od-previa{position:relative;cursor:pointer;border-radius:var(--r);transition:box-shadow .15s}
+.od-previa{position:relative;cursor:pointer;border-radius:var(--r);transition:box-shadow .15s;
+  display:flex;flex-direction:column}
 .od-previa:hover{box-shadow:0 0 0 2px var(--accent)}
 .od-previa .arcada svg{pointer-events:none}
-.od-chamada{position:absolute;right:14px;bottom:14px;background:var(--accent);
-  color:var(--accent-ink);border-radius:var(--r-sm);padding:8px 12px;box-shadow:var(--shadow)}
+/* A chamada era position:absolute no canto inferior direito da prévia —
+   e o canto inferior direito da prévia é onde termina a LEGENDA. Ela
+   cobria "Extração indicada", "Retração" e "Sangramento" no celular, e
+   também no computador: medido, tapava 6.158 px² da legenda em 1440 e
+   8.587 px² em 412. Flutuar sobre conteúdo que cresce (a legenda quebra
+   em 1, 2 ou 3 linhas conforme a largura) é a própria causa — então ela
+   saiu do absoluto e entrou no fluxo, embaixo de tudo. */
+.od-chamada{align-self:flex-end;background:var(--accent);color:var(--accent-ink);
+  border-radius:var(--r-sm);padding:8px 12px;box-shadow:var(--shadow);margin-top:10px}
 .od-chamada b{display:block;font-size:12.5px}
 .od-chamada span{display:block;font-size:10.5px;opacity:.85}
+/* no celular vira barra inteira: além de não sobrar espaço ao lado, o
+   alvo de toque passa a ser a largura da tela em vez de 174px */
+@media (max-width:560px){
+  .od-chamada{align-self:stretch;text-align:center}
+}
 
 @media (max-width:860px){
   .od-palco{flex-direction:column}
@@ -1680,7 +1693,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v69 · 19/11/2026";
+const VERSAO = "v70 · 19/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
