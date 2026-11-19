@@ -1306,6 +1306,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
       <div class="aba naoimprime" role="tablist" id="finAbas" style="margin-bottom:12px">
         <button role="tab" aria-selected="true"  data-fin="painel">Painel</button>
         <button role="tab" aria-selected="false" data-fin="fluxo">Fluxo de caixa</button>
+        <button role="tab" aria-selected="false" data-fin="cobrancas">Cobranças</button>
         <button role="tab" aria-selected="false" data-fin="recebidos">Recebimentos</button>
         <button role="tab" aria-selected="false" data-fin="despesas">Despesas</button>
         <button role="tab" aria-selected="false" data-fin="producao">Produção</button>
@@ -1474,22 +1475,26 @@ const PERFIS = {
     custo:true,
     parceiros:true, parceirosEdita:true,
     valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
-    lancaPagamento:true,
+    lancaPagamento:true, lancaCobranca:true, despesas:true, contas:true,
     precos:true, precoTodos:true, soMinhas:false},
-  /* O cliente foi explícito: "Perfil Dentista nao precisa ter acesso ao
-     financeiro, pagamento, recebimento. apenas as atividades
-     relacionadas ao paciente, atendimento, materiais, estoque e
-     procedimentos e anamnese." Então financeiro, caixa e projeção saem —
-     e saem TAMBÉM no banco (ATUALIZAR-FINANCEIRO-V2.sql), porque
-     esconder o botão não é controle de acesso.
-     precos fica: a tabela de preço do próprio trabalho é dele, e é com
-     ela que o orçamento do paciente é montado. */
+  /* O DENTISTA FICA FORA DO FINANCEIRO — e quem precisa ver é o DONO.
+
+     Houve um meio-termo no caminho ("acompanhar, sem editar") que o
+     cliente descartou: "vamos deixar de lado mesmo. A melhor solução é
+     criar o perfil dentista-proprietário que tem mesmo nível de acesso
+     que o adm."
+
+     É a decisão certa e evita um perfil anfíbio. Quem atende e não é
+     dono não tem o que fazer no caixa da clínica; quem é dono precisa
+     de tudo, não de uma janela de leitura. Então aqui volta a versão
+     simples, e o perfil novo entra logo abaixo. */
   Dentista:{rotulo:"Dentista", desc:"Atende, edita prontuário e agenda",
     telas:["hoje","pacientes","estoque","agenda","parceiros"],
     lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:false, cadastro:true, admin:false,
     custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:false, projecao:false, relatorios:false,
+    lancaCobranca:false, despesas:false, contas:false,
     /* lancaPagamento:false espelha a política do banco: só
        administrador, financeiro e secretaria inserem em pagamentos. O
        dentista vê o que foi pago nas cobranças dele e lança cobrança,
@@ -1499,6 +1504,30 @@ const PERFIS = {
     // precoTodos:false e soMinhas:true são o "só o que é meu": tabela
     // própria, cobranças próprias, recebimento próprio
     precos:true, precoTodos:false, soMinhas:true},
+  /* DENTISTA-PROPRIETÁRIO: tudo do administrador, e atende.
+
+     Não é "administrador com outro nome". A diferença que justifica o
+     perfil é que ele OCUPA A CADEIRA: entra na lista de dentistas da
+     agenda, tem tabela de preço e kit próprios, é o dentista_id dos
+     atendimentos e das cobranças dele. Um administrador puro — o Luiz,
+     por exemplo — administra e não atende.
+
+     No banco isso é uma linha só: tem_perfil() passa a responder que
+     este perfil satisfaz tanto 'administrador' quanto 'dentista', e as
+     109 políticas existentes herdam o comportamento sem serem tocadas
+     (ATUALIZAR-DENTISTA-PROPRIETARIO.sql). */
+  DentistaProprietario:{rotulo:"Dentista-proprietário",
+    desc:"Atende e administra a clínica — acesso total",
+    telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, admin:true,
+    custo:true,
+    parceiros:true, parceirosEdita:true,
+    valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
+    lancaPagamento:true, lancaCobranca:true, despesas:true, contas:true,
+    /* precoTodos para ver a tabela de todos, soMinhas false para ver o
+       caixa inteiro — e mesmo assim ele TEM tabela própria, porque
+       atende. Quem decide isso é ATENDE/COM_TABELA, abaixo. */
+    precos:true, precoTodos:true, soMinhas:false},
   Secretaria:{rotulo:"Secretária", desc:"Cadastro, contato e agenda",
     /* a secretária entra em Parceiros por pedido do cliente, e com
        razão: é ela quem liga para o laboratório, marca a tomografia e
@@ -1509,7 +1538,7 @@ const PERFIS = {
     custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:true, projecao:false, relatorios:false,
-    lancaPagamento:true,
+    lancaPagamento:true, lancaCobranca:true, despesas:false, contas:false,
     // lê a tabela de todos para cobrar certo, mas não tabela preço de ninguém
     precos:"ler", precoTodos:true, soMinhas:false},
   Financeiro:{rotulo:"Financeiro", desc:"Faturamento, recebimento e agenda",
@@ -1525,7 +1554,7 @@ const PERFIS = {
     custo:true,
     parceiros:true, parceirosEdita:false,
     valores:true, lancaLote:false, caixa:true, projecao:true, relatorios:true,
-    lancaPagamento:true,
+    lancaPagamento:true, lancaCobranca:true, despesas:true, contas:true,
     precos:true, precoTodos:true, soMinhas:false},
   /* O assistente trabalha ao lado do dentista, na cadeira: enxerga o
      prontuário para saber o que está sendo feito e lança o material
@@ -1538,7 +1567,7 @@ const PERFIS = {
     financeiro:false, cadastro:false, admin:false,
     parceiros:false, parceirosEdita:false,
     custo:false, valores:false, lancaLote:false, caixa:false, projecao:false, relatorios:false,
-    lancaPagamento:false,
+    lancaPagamento:false, lancaCobranca:false, despesas:false, contas:false,
     /* a permissão que define este perfil: mexe na lista de materiais do
        atendimento aberto e grava só isso */
     lancaMaterial:true,
@@ -1558,11 +1587,26 @@ const PERFIS = {
        taxas de maquininha são da clínica e não passam por aqui. Eram uma
        chave só, e por isso quem lançava nota enxergava a margem. */
     custo:true, valores:false, lancaLote:true, caixa:false, projecao:false, relatorios:false,
-    lancaPagamento:false,
+    lancaPagamento:false, lancaCobranca:false, despesas:false, contas:false,
     precos:false, precoTodos:false, soMinhas:false}
 };
 /* Os usuários fictícios foram removidos: o sistema entrou em produção e
    acesso agora só existe se o administrador criar. */
+/* DUAS PERGUNTAS DIFERENTES, e misturá-las foi o que deixou o
+   administrador sem tabela de preço e o proprietário fora da agenda:
+
+   · ATENDE — aparece na lista de dentistas da agenda. O administrador
+     entra porque, em consultório pequeno, é ele quem cobre a cadeira;
+   · COM_TABELA — tem tabela de preço e kit PRÓPRIOS. O administrador
+     puro não tem: ele administra, e o preço é de quem executa.
+
+   Espalhar `perfil === "Dentista" || perfil === "Administrador"` por
+   seis lugares é como um perfil novo some de metade do sistema. */
+const ATENDE      = new Set(["Dentista", "DentistaProprietario", "Administrador"]);
+const COM_TABELA  = new Set(["Dentista", "DentistaProprietario"]);
+const atendePaciente = u => !!u && ATENDE.has(u.perfil);
+const temTabelaPropria = u => !!u && COM_TABELA.has(u.perfil);
+
 const USUARIOS_SEED = [];
 let usuario = null;
 const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
@@ -1579,7 +1623,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v64 · 18/11/2026";
+const VERSAO = "v66 · 19/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1589,6 +1633,7 @@ let MODO = "demo";              // "demo" | "nuvem"
 let nuvemTestada = false;
 
 const PERFIL_DB2APP = {administrador:"Administrador", dentista:"Dentista",
+  dentista_proprietario:"DentistaProprietario",
   secretaria:"Secretaria", financeiro:"Financeiro", estoque:"Estoque",
   assistente:"Assistente"};
 const PERFIL_APP2DB = Object.fromEntries(Object.entries(PERFIL_DB2APP).map(([a,b])=>[b,a]));
@@ -1648,12 +1693,18 @@ const DB = {
      for em um desses a falha sobe como antes. */
   COLUNAS_OPCIONAIS: new Set(["maquininha_id","nota_fiscal","nota_numero",
                               "bandeira","nsu","adquirente","observacao",
-                              "conta_id","plano_descricao"]),
+                              "conta_id","plano_descricao","pedido_id"]),
   async inserirTolerante(tabela, corpo, prefer){
+    return await DB.escreverTolerante("POST", tabela, corpo, prefer);
+  },
+  /* o mesmo cuidado para o PATCH: a observação do cadastro é coluna
+     nova, e quem ainda não rodou o SQL não pode perder a gravação da
+     ficha inteira por causa dela */
+  async escreverTolerante(metodo, tabela, corpo, prefer){
     let atual = {...corpo};
     const tiradas = [];
     for(let tentativa = 0; tentativa < 4; tentativa++){
-      try{ return await DB.rest("POST", tabela, atual, prefer); }
+      try{ return await DB.rest(metodo, tabela, atual, prefer); }
       catch(e){
         const m = /Could not find the '([^']+)' column/i.exec(e.message || "");
         const col = m && m[1];
@@ -1809,7 +1860,10 @@ const DB = {
       DB.rest("GET","procedimento_kit?select=procedimento_id,material_id,quantidade,dentista_id")
         .catch(()=>DB.rest("GET","procedimento_kit?select=procedimento_id,material_id,quantidade")),
       DB.rest("GET","estoque?select=material_id,saldo"),
-      DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,pacientes_clinico(observacao)&order=nome"),
+      DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,observacao,"+
+        "pacientes_clinico(observacao)&order=nome")
+        .catch(()=>DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,"+
+          "pacientes_clinico(observacao)&order=nome")),
       DB.rest("GET","vw_consentimento_vigente?select=paciente_id,grava_consulta,texto_versao,concedido_em")
         .catch(()=>[]),
       DB.rest("GET","atendimentos?select=id,paciente_id,procedimento,regiao,complexidade,duracao_min,realizado_em,"+
@@ -1825,7 +1879,11 @@ const DB = {
       const cl = Array.isArray(p.pacientes_clinico) ? p.pacientes_clinico[0] : p.pacientes_clinico;
       return {id:curto, nome:p.nome, nasc:p.nascimento||"", sexo:SEXO_DB2APP[p.sexo]||"",
         cpf:p.cpf?fmtCpf(p.cpf):"", tel:p.telefone||"", email:p.email||"",
-        obs:(cl&&cl.observacao)||""};
+        /* obs = clínica (pacientes_clinico, ato do dentista)
+           obsGeral = recado da recepção (pacientes.observacao).
+           Duas coisas diferentes, e misturá-las faria a secretária
+           escrever no prontuário ou perder o próprio recado. */
+        obs:(cl&&cl.observacao)||"", obsGeral:p.observacao||""};
     });
     /* consentimento de gravação: a tela precisa dele ANTES de o dentista
        apertar "gravar a consulta". Mapeado DEPOIS dos pacientes, senão
@@ -1910,12 +1968,13 @@ const DB = {
   /* ---------------- escrita ---------------- */
   async gravarPaciente(p){
     const corpo = {nome:p.nome, nascimento:p.nasc||null, sexo:SEXO_APP2DB[p.sexo]||null,
-      cpf:(p.cpf||"").replace(/\D/g,"")||null, telefone:p.tel||null, email:p.email||null};
+      cpf:(p.cpf||"").replace(/\D/g,"")||null, telefone:p.tel||null, email:p.email||null,
+      observacao: (p.obsGeral||"").trim() || null};
     if(UID.pac[p.id]){
-      await DB.rest("PATCH","pacientes?id=eq."+UID.pac[p.id], corpo);
+      await DB.escreverTolerante("PATCH","pacientes?id=eq."+UID.pac[p.id], corpo);
     }else{
       corpo.clinica_id = DB.clinica;
-      const r = await DB.rest("POST","pacientes", corpo, "return=representation");
+      const r = await DB.escreverTolerante("POST","pacientes", corpo, "return=representation");
       UID.pac[p.id]=r[0].id; UID.pacRev[r[0].id]=p.id;
     }
     return UID.pac[p.id];
@@ -6999,6 +7058,8 @@ function htmlAgendaDeHoje(){
   if(!telas.includes("agenda") && !pode("agenda")) return "";
   const iso = diaISO(hoje);
   const meu = DB.meuId || usuario.id;
+  /* só o dentista COMUM vê a própria agenda; o proprietário vê a
+     clínica inteira, como o administrador */
   const soMeus = usuario.perfil === "Dentista";
   const evs = (agenda.eventos||[])
     .filter(e => diaISO(new Date(e.inicio)) === iso)
@@ -7092,7 +7153,8 @@ function renderListaPacientes(){
     const ult=meus.slice().sort((a,b)=>a.data<b.data?1:-1)[0];
     const sub = (m.hits && m.hits.length)
       ? m.hits.length+"× "+m.hits[0].proc + (m.hits.length>1?" e outros":"")
-      : pode("verClinico") ? (p.obs||"—") : (p.tel||p.email||"contato não informado");
+      : pode("verClinico") ? (p.obs || p.obsGeral || "—")
+                           : (p.obsGeral || p.tel || p.email || "contato não informado");
     const b=document.createElement("button"); b.className="item";
     b.innerHTML=`<div class="av">${p.nome.slice(0,1)}</div>
       <div class="main"><b>${p.nome}</b><small>${sub}</small></div>
@@ -7189,6 +7251,11 @@ function abrirPaciente(id){
         ${pend?`<div class="pend">${pend} campo(s) em branco — ${editaCad?"complete pelo botão abaixo.":"peça à secretária para completar."}</div>`:""}
         ${editaCad?`<div class="rowbtns"><button class="minibtn" id="editPac">Editar cadastro</button></div>`:""}
       </div>
+
+      ${p.obsGeral?`<div class="card">
+        <div class="eyebrow">Observação do cadastro</div>
+        <p style="margin:7px 0 0;font-size:13px;color:var(--ink-2);line-height:1.55">${esc(p.obsGeral)}</p>
+      </div>`:""}
 
       ${clinico?`<div class="card">
         <div class="eyebrow">Observação clínica</div>
@@ -7308,6 +7375,11 @@ function editarPaciente(id){
       <div class="field"><label for="edCpf">CPF</label><input id="edCpf" inputmode="numeric" class="mono" placeholder="000.000.000-00" maxlength="14" value="${esc(p.cpf)}"></div>
       <div class="field"><label for="edTel">Celular / WhatsApp</label><input id="edTel" type="tel" inputmode="numeric" class="mono" placeholder="11 - 99999-9999" maxlength="17" value="${esc(p.tel)}"></div>
       <div class="field"><label for="edEmail">E-mail</label><input id="edEmail" type="email" placeholder="nome@email.com" value="${esc(p.email)}"></div>
+      <div class="field"><label for="edObsGeral">Observação do cadastro</label>
+        <input id="edObsGeral" value="${esc(p.obsGeral)}"
+          placeholder="só avaliação · veio por indicação · prefere a tarde">
+        <div class="hint" style="margin-top:4px">Recado da recepção. Não é prontuário —
+          serve para o paciente que ainda só marcou avaliação e nem tem anamnese.</div></div>
       ${clinico?`<div class="field"><label for="edObs">Observação clínica</label><input id="edObs" value="${esc(p.obs)}"></div>`
                :`<div class="stage">A observação clínica é editada pelo dentista.</div>`}
       <div class="row"><button class="btn primary" style="flex:1" id="edSalvar">${
@@ -7339,6 +7411,7 @@ function editarPaciente(id){
     }
     p.nome=nome; p.nasc=nasc; p.sexo=$("#edSexo").value; p.cpf=fmtCpf(cpf);
     p.tel=fmtCel($("#edTel").value); p.email=email;
+    p.obsGeral=$("#edObsGeral").value.trim();
     if(clinico) p.obs=$("#edObs").value.trim();
     save();
     (async ()=>{
@@ -9177,7 +9250,7 @@ const AG = {
     return await DB.rest("GET","salas?select=id,nome,ordem&ativa=is.true&order=ordem");
   },
   async dentistas(){
-    return (S.usuarios||[]).filter(u=>u.perfil==="Dentista"||u.perfil==="Administrador");
+    return (S.usuarios||[]).filter(atendePaciente);
   },
   /* leitura por período, em vez de por mês: é o que a semana da lateral
      precisa, e é o mesmo endpoint — só muda a janela */
@@ -9238,6 +9311,38 @@ const AG = {
       });
     }catch(e){
       // 23P01 é a trava de sobreposição; qualquer outra coisa sobe como está
+      if(/sobreposicao|exclusion|conflicting key|23P01/i.test(e.message||"")) e.conflito = true;
+      throw e;
+    }
+  },
+  /* EDITAR o que já está marcado — não é o mesmo que remarcar.
+     Remarcar cancela e cria outro, de propósito: o paciente mudou de
+     horário e o histórico precisa mostrar os dois. Mas esticar de 30
+     para 60 minutos, trocar a sala ou corrigir o procedimento não é
+     outro compromisso: é o mesmo, com o dado certo. Cancelar e recriar
+     por causa disso encheria a agenda de cancelamentos que não
+     aconteceram. */
+  async atualizar(ev, d){
+    if(MODO!=="nuvem"){
+      const e=(S.agendaMes||[]).find(x=>x.id===ev.id); if(!e) return;
+      const fim = new Date(new Date(d.inicio).getTime() + d.duracao_min*60000).toISOString();
+      const choque = (S.agendaMes||[]).find(x=>x.id!==ev.id && OCUPA.includes(x.status)
+        && x.sala_id===d.sala_id
+        && new Date(x.inicio) < new Date(fim) && new Date(x.fim) > new Date(d.inicio));
+      if(choque){ const err=new Error("sala ocupada"); err.conflito=true; throw err; }
+      Object.assign(e, d, {fim,
+        sala:(agenda.salas.find(x=>x.id===d.sala_id)||{}).nome,
+        dentista:(S.usuarios.find(u=>u.id===d.dentista_id)||{}).nome,
+        paciente:d.pacienteNome!==undefined?d.pacienteNome:e.paciente});
+      save(); return;
+    }
+    try{
+      await DB.rest("PATCH","agendamentos?id=eq."+ev.id, {
+        sala_id: d.sala_id, dentista_id: d.dentista_id,
+        paciente_id: d.paciente_id || null, inicio: d.inicio,
+        duracao_min: d.duracao_min, procedimento: d.procedimento || null,
+        titulo: d.titulo || null, status: d.status});
+    }catch(e){
       if(/sobreposicao|exclusion|conflicting key|23P01/i.test(e.message||"")) e.conflito = true;
       throw e;
     }
@@ -9490,14 +9595,30 @@ function renderDia(){
 /* ---------- formulário de bloqueio / agendamento ---------- */
 let remarcando = null;
 
-function abrirForm(tipo, minuto){
+function abrirForm(tipo, minuto, ev){
   const box = $("#agForm");
-  const sel = minuto!==undefined ? minuto : 9*60;
+  const edit = ev || null;
   const meu = DB.meuId || (usuario && usuario.id);
   const bloqueio = tipo==="bloqueio";
+  const sel = edit ? minDe(new Date(edit.inicio))
+            : (minuto!==undefined ? minuto : 9*60);
+  const durAtual = edit ? edit.duracao_min : (bloqueio?60:30);
+  const DURACOES = [15,20,30,45,60,90,120,150,180,240,300,360,480];
+  if(!DURACOES.includes(durAtual)) DURACOES.push(durAtual);
+  DURACOES.sort((a,b)=>a-b);
 
   box.innerHTML = `<div class="card" style="margin-bottom:10px">
-    <div class="eyebrow">${bloqueio?"Bloquear horário":"Agendar paciente"}</div>
+    <div class="eyebrow">${edit ? "Editar o que está marcado"
+                                : bloqueio?"Bloquear horário":"Agendar paciente"}</div>
+    <!-- Alternar aqui dentro foi pedido: clicar num horário vago abria
+         direto "agendar paciente", e quem só queria FECHAR o horário
+         (vai atender em outro consultório) concluía que a agenda exigia
+         paciente cadastrado. O botão "Bloquear horário" existia lá em
+         cima e passava despercebido. -->
+    <div class="aba" role="tablist" style="margin-top:8px">
+      <button role="tab" aria-selected="${!bloqueio}" data-agtipo="agendamento">Paciente</button>
+      <button role="tab" aria-selected="${bloqueio}" data-agtipo="bloqueio">Bloquear horário</button>
+    </div>
     <div style="display:flex;flex-direction:column;gap:11px;margin-top:9px">
       <div class="grid2">
         <div class="field"><label for="agHora">Início</label>
@@ -9505,28 +9626,45 @@ function abrirForm(tipo, minuto){
           <div class="hint" style="margin-top:4px">Qualquer horário — a grade é de 30 em 30
             só para desenhar o dia.</div></div>
         <div class="field"><label for="agDur">Duração (min)</label>
-          <select id="agDur">${[15,20,30,45,60,90,120,150,180,240].map(d=>`<option value="${d}" ${d===(bloqueio?60:30)?"selected":""}>${d}</option>`).join("")}</select>
-          <div class="hint" style="margin-top:4px">&nbsp;</div></div>
+          <select id="agDur">${DURACOES.map(d=>`<option value="${d}" ${d===durAtual?"selected":""}>${
+            d>=60 ? d+" ("+(d/60).toLocaleString("pt-BR",{maximumFractionDigits:1})+"h)" : d}</option>`).join("")}</select>
+          <div class="hint" style="margin-top:4px">480 min fecha o dia inteiro.</div></div>
       </div>
       <div class="grid2">
         <div class="field"><label for="agSala">Sala</label>
-          <select id="agSala">${agenda.salas.map(s=>`<option value="${s.id}" ${s.id===agenda.sala?"selected":""}>${s.nome}</option>`).join("")}</select></div>
+          <select id="agSala">${agenda.salas.map(s=>`<option value="${s.id}" ${
+            s.id===(edit?edit.sala_id:agenda.sala)?"selected":""}>${s.nome}</option>`).join("")}</select></div>
         <div class="field"><label for="agDent">Dentista</label>
-          <select id="agDent">${agenda.dentistas.map(u=>`<option value="${u.id}" ${u.id===meu?"selected":""}>${u.nome}</option>`).join("")}</select></div>
+          <select id="agDent">${agenda.dentistas.map(u=>`<option value="${u.id}" ${
+            u.id===(edit?edit.dentista_id:meu)?"selected":""}>${u.nome}</option>`).join("")}</select></div>
       </div>
       ${bloqueio
         ? `<div class="field"><label for="agTitulo">Motivo do bloqueio</label>
-             <input id="agTitulo" placeholder="Ex.: cirurgia longa, manutenção da sala, reunião" autocomplete="off"></div>`
+             <input id="agTitulo" value="${esc(edit&&edit.titulo||"")}"
+               placeholder="Ex.: atendendo em outro consultório, cirurgia longa, reunião" autocomplete="off"></div>
+           <div class="stage">Bloqueio não precisa de paciente — é só o horário saindo
+             da agenda. Use para o dia em que você atende fora, para manutenção da sala
+             ou para qualquer compromisso que ocupe a cadeira.</div>`
         : `<div class="field"><label for="agPac">Paciente</label>
-             <input id="agPac" list="pacList" placeholder="Nome do paciente" autocomplete="off"></div>
+             <input id="agPac" list="pacList" value="${esc(edit&&edit.paciente||"")}"
+               placeholder="Nome do paciente" autocomplete="off"></div>
            <div class="field"><label for="agProc">Procedimento</label>
-             <input id="agProc" list="procList" placeholder="Ex.: reavaliação pós-operatória" autocomplete="off"></div>`}
+             <input id="agProc" list="procList" value="${esc(edit&&edit.procedimento||"")}"
+               placeholder="Ex.: reavaliação pós-operatória" autocomplete="off"></div>`}
       <div class="row">
-        <button class="btn primary" style="flex:1" id="agSalvar">${bloqueio?"Bloquear":"Agendar"}</button>
+        <button class="btn primary" style="flex:1" id="agSalvar">${
+          edit ? "Salvar alteração" : bloqueio?"Bloquear":"Agendar"}</button>
         <button class="btn" id="agCancelar">Cancelar</button>
       </div>
     </div></div>`;
 
+  box.querySelectorAll("[data-agtipo]").forEach(b=>b.addEventListener("click", ()=>{
+    if(b.dataset.agtipo === tipo) return;
+    /* guarda o que já foi digitado de comum antes de trocar de modo */
+    const h = ($("#agHora").value||"").split(":");
+    const t = (Number(h[0])||0)*60 + (Number(h[1])||0);
+    abrirForm(b.dataset.agtipo, t, edit);
+  }));
   $("#agCancelar").addEventListener("click", ()=>{ box.innerHTML=""; });
   $("#agSalvar").addEventListener("click", async ()=>{
     /* o campo agora é hora livre ("09:15"), não mais um índice de slot */
@@ -9568,15 +9706,21 @@ function abrirForm(tipo, minuto){
     }
 
     const bt = $("#agSalvar"); bt.disabled = true; bt.textContent = "Salvando…";
+    const dados = {sala_id:salaId, dentista_id:dentId, paciente_id:pacienteId,
+      pacienteNome, inicio: ini.toISOString(), duracao_min: dur,
+      status: bloqueio ? "bloqueado" : (edit && !bloqueio ? edit.status : "agendado"),
+      procedimento: proc, titulo};
     try{
-      await AG.criar({sala_id:salaId, dentista_id:dentId, paciente_id:pacienteId,
-        pacienteNome, inicio: ini.toISOString(), duracao_min: dur,
-        status: bloqueio ? "bloqueado" : "agendado", procedimento: proc, titulo});
+      if(edit) await AG.atualizar(edit, dados);
+      else     await AG.criar(dados);
       box.innerHTML = "";
       await carregarAgenda();
-      toast(bloqueio ? "Horário bloqueado às "+hhmm(t)+"." : "Paciente agendado às "+hhmm(t)+".");
+      toast(edit ? "Alteração salva — agora das "+hhmm(t)+" às "+hhmm(t+dur)+"."
+          : bloqueio ? "Horário bloqueado às "+hhmm(t)+"."
+          : "Paciente agendado às "+hhmm(t)+".");
     }catch(e){
-      bt.disabled=false; bt.textContent = bloqueio?"Bloquear":"Agendar";
+      bt.disabled=false;
+      bt.textContent = edit ? "Salvar alteração" : bloqueio?"Bloquear":"Agendar";
       if(e.conflito){
         const fim = new Date(ini.getTime()+dur*60000);
         await mostrarConflito(salaId, ini.toISOString(), fim.toISOString());
@@ -9643,6 +9787,8 @@ function acoesDoEvento(ev){
       </div></div>
     ${doOutro?`<div class="stage">Este horário é de ${ev.dentista}. Você pode ver, mas quem libera é quem reservou — ou o administrador.</div>`:""}
     <div class="row" id="acoesAg" style="margin-top:4px">
+      ${(!doOutro || pode("admin")) && OCUPA.includes(ev.status)
+        ? '<button class="btn" data-ac="editar">Editar</button>' : ""}
       ${(!doOutro || pode("admin")) && ev.status==="bloqueado"
         ? '<button class="btn" data-ac="liberar">Liberar horário</button>' : ""}
       ${(!doOutro || pode("admin")) && ["agendado","confirmado","encaixe","emergencia"].includes(ev.status) ? `
@@ -9660,6 +9806,17 @@ function acoesDoEvento(ev){
     const ac = b.dataset.ac;
     box.querySelectorAll("button").forEach(x=>x.disabled=true);
     try{
+      if(ac==="editar"){
+        $("#loteModal").hidden = true;
+        /* o dia do evento pode não ser o dia aberto na tela — editar a
+           partir da semana da lateral, por exemplo */
+        agenda.dia = diaISO(new Date(ev.inicio));
+        renderDia();
+        abrirForm(ev.status==="bloqueado" ? "bloqueio" : "agendamento", undefined, ev);
+        setTimeout(()=>{ const f=$("#agForm");
+          if(f) f.scrollIntoView({block:"center", behavior:"smooth"}); }, 80);
+        return;
+      }
       if(ac==="liberar"){
         await AG.mudarStatus(ev.id, "cancelado", {motivo_cancelamento:"bloqueio liberado"});
         toast("Horário liberado.");
@@ -10729,6 +10886,8 @@ function renderMiniAgenda(){
   const hojeI = diaISO(hoje);
   const naSemanaDeHoje = hojeI >= ini && hojeI <= fim;
   const meu = DB.meuId || usuario.id;
+  /* só o dentista COMUM vê a própria agenda; o proprietário vê a
+     clínica inteira, como o administrador */
   const soMeus = usuario.perfil === "Dentista";
 
   const fonte = (agenda.semana === null || agenda.semana === undefined)
@@ -11104,7 +11263,7 @@ function htmlDespForm(d){
         + esc(x.nome)+'</option>').join("") + '</select></div>'
     + '<div class="field"><label for="dsDent">Dentista — se é rateada para um só</label>'
     + '<select id="dsDent"><option value="">— da clínica —</option>'
-    + (S.usuarios||[]).filter(u=>u.perfil==="Dentista"||u.perfil==="Administrador")
+    + (S.usuarios||[]).filter(atendePaciente)
         .map(u=>'<option value="'+u.id+'"'+(d.dentista_id===u.id?" selected":"")+'>'
           + esc(u.nome)+'</option>').join("") + '</select></div></div>'
     + '<div class="grid2">'
@@ -11383,6 +11542,123 @@ function ligarDespesas(){
 }
 
 /* =====================================================================
+   COBRANÇAS — a aba que responde "onde eu lanço isso?"
+
+   O dentista perdeu o lançamento de pagamento na ficha (de propósito:
+   recebimento é do caixa) e então perguntou onde fica no Financeiro. A
+   resposta, até agora, era "na ficha do paciente" — e não havia nada no
+   Financeiro que dissesse isso nem que levasse até lá.
+
+   Esta aba é a lista do que está em aberto, com o caminho de volta para
+   a ficha em um clique. Ela não duplica o lançamento: cobrança e
+   pagamento continuam sendo lançados na ficha, que é onde está o
+   atendimento, o material usado e o histórico. Ter dois lugares para
+   lançar a mesma coisa é como se perde a conta de quem cobrou o quê.
+   ===================================================================== */
+let cobFiltro = "abertas";   // "abertas" | "vencidas" | "todas"
+
+function linhasCobranca(){
+  const pagos = {};
+  (S.pagamentos||[]).forEach(pg=>{
+    pagos[pg.cobranca_id] = (pagos[pg.cobranca_id]||0) + Number(pg.valor||0);
+  });
+  const hojeI = hojeISO();
+  return cobrancasVisiveis().map(c=>{
+    const pago = cent(pagos[c.id] || 0);
+    const falta = cent(Number(c.valor||0) - pago);
+    const pac = pacById(c.pac);
+    return {...c, pago, falta, pacNome: pac ? pac.nome : "—",
+      vencida: falta > 0.005 && c.vencimento && c.vencimento < hojeI};
+  }).sort((a,b)=>String(b.emitida_em||"").localeCompare(String(a.emitida_em||"")));
+}
+
+function htmlCobrancas(){
+  const todas = linhasCobranca();
+  const lista = cobFiltro === "todas"   ? todas
+              : cobFiltro === "vencidas"? todas.filter(c=>c.vencida)
+              : todas.filter(c=>c.falta > 0.005);
+  const soma = lista.reduce((a,c)=>({
+    cobrado: a.cobrado + Number(c.valor||0),
+    pago:    a.pago + c.pago,
+    falta:   a.falta + c.falta}), {cobrado:0, pago:0, falta:0});
+  const vencidas = todas.filter(c=>c.vencida);
+
+  return '<div class="sec-h"><h2>Cobranças</h2>'
+    + '<span class="hint">' + (pode("lancaCobranca")
+        ? "lançadas na ficha do paciente" : "do seu atendimento") + '</span></div>'
+
+    + (S.falhouCaixa ? '<div class="stage"><b>Não consegui ler o caixa no banco.</b> '
+        + 'O que aparece abaixo pode estar incompleto. Detalhe: '
+        + esc(S.falhouCaixa) + '</div>' : "")
+
+    + (pode("lancaCobranca")
+        ? '<div class="stage">Para lançar uma cobrança ou registrar um pagamento, abra a '
+          + '<b>ficha do paciente</b> e vá em <b>Pagamentos</b>. É lá que estão o '
+          + 'atendimento, o material usado e o histórico — ter dois lugares para lançar '
+          + 'a mesma coisa é como se perde a conta de quem cobrou o quê. '
+          + 'Use o botão <b>abrir ficha</b> abaixo.</div>'
+        : '<div class="stage">Você acompanha; quem lança é o caixa — secretaria, '
+          + 'financeiro ou administrador.</div>')
+
+    + '<div class="row" style="margin-top:10px">'
+    + '<select id="cbFiltro" style="max-width:200px">'
+    + [["abertas","Em aberto"],["vencidas","Vencidas"],["todas","Todas"]]
+        .map(([v,r])=>'<option value="'+v+'"'+(cobFiltro===v?" selected":"")+'>'+r+'</option>').join("")
+    + '</select></div>'
+
+    + '<div class="tiles" style="margin-top:10px">'
+    + '<div class="tile"><b>'+fmtBRL(cent(soma.cobrado))+'</b><span>cobrado no recorte</span></div>'
+    + '<div class="tile ok"><b>'+fmtBRL(cent(soma.pago))+'</b><span>já pago</span></div>'
+    + '<div class="tile warn"><b>'+fmtBRL(cent(soma.falta))+'</b><span>a receber</span></div>'
+    + (vencidas.length ? '<div class="tile crit"><b>'+vencidas.length
+        +'</b><span>cobrança(s) vencida(s)</span></div>' : "")
+    + '</div>'
+
+    + (lista.length ? '<div class="rolar" style="margin-top:10px"><table class="tab-rel">'
+      + '<thead><tr><th>Paciente</th><th>Cobrança</th><th>Vencimento</th>'
+      + '<th class="n">Valor</th><th class="n">Pago</th><th class="n">Falta</th>'
+      + '<th>Situação</th><th class="naoimprime"></th></tr></thead><tbody>'
+      + lista.map(c=>{
+          const sit = c.falta<=0.005 ? ["ok","quitada"]
+                    : c.vencida ? ["crit","vencida"]
+                    : c.pago>0 ? ["warn","parcial"] : ["neutral","aberta"];
+          return '<tr><td><b>'+esc(c.pacNome)+'</b></td>'
+            + '<td>'+esc(c.descricao||"Cobrança")
+            + (c.plano_descricao?'<br><small style="color:var(--ink-3)">'
+                + esc(c.plano_descricao)+'</small>':"")+'</td>'
+            + '<td>'+(c.vencimento?fmtData(c.vencimento):"—")+'</td>'
+            + '<td class="n">'+fmtBRL(c.valor)+'</td>'
+            + '<td class="n">'+(c.pago?fmtBRL(c.pago):'<span class="vaga">—</span>')+'</td>'
+            + '<td class="n"><b>'+(c.falta>0.005?fmtBRL(c.falta):'—')+'</b></td>'
+            + '<td><span class="pill '+sit[0]+'">'+sit[1]+'</span></td>'
+            + '<td class="naoimprime"><button class="minibtn" data-cbficha="'+esc(c.pac)
+            + '">abrir ficha</button></td></tr>';
+        }).join("")
+      + '</tbody><tfoot><tr><td colspan="3">Total</td>'
+      + '<td class="n">'+fmtBRL(cent(soma.cobrado))+'</td>'
+      + '<td class="n">'+fmtBRL(cent(soma.pago))+'</td>'
+      + '<td class="n"><b>'+fmtBRL(cent(soma.falta))+'</b></td>'
+      + '<td colspan="2"></td></tr></tfoot></table></div>'
+      : '<div class="empty" style="margin-top:10px">'
+        + (cobFiltro==="todas" ? "Nenhuma cobrança lançada ainda."
+           : "Nada "+(cobFiltro==="vencidas"?"vencido":"em aberto")+".")+'</div>');
+}
+
+function ligarCobrancas(){
+  const f=$("#cbFiltro");
+  if(f) f.addEventListener("change", ()=>{ cobFiltro=f.value; renderFinanceiro(); });
+  $$("#finPainel [data-cbficha]").forEach(b=>b.addEventListener("click", ()=>{
+    const pid = b.dataset.cbficha;
+    document.querySelector(".tab[data-scr='pacientes']").click();
+    setTimeout(()=>{
+      abrirPaciente(pid);
+      setTimeout(()=>{ const cx=$("#caixaBox");
+        if(cx) cx.scrollIntoView({block:"start", behavior:"smooth"}); }, 160);
+    }, 120);
+  }));
+}
+
+/* =====================================================================
    PAINEL DO FINANCEIRO
 
    "criar um dashboard profissional da situação financeira e do fluxo de
@@ -11644,7 +11920,7 @@ function htmlPainel(){
     + (linhas.length ? "" : '<div class="empty" style="margin-top:12px">'
         + 'Nada no período e nos filtros escolhidos.</div>')
 
-    + htmlDespesasDoPainel(s.liquido)
+    + (pode("despesas") ? htmlDespesasDoPainel(s.liquido) : "")
 
     + tabelaPainel("Por mês",
         agruparPainel(linhas, painel.base==="pagamento" ? "pago_em" : "previsao_credito",
@@ -11745,7 +12021,7 @@ function htmlContas(){
       + '</select></div>'
       + '<div class="field"><label for="ctDono">Dentista dono (conta PF)</label><select id="ctDono">'
       + '<option value="">— da clínica —</option>'
-      + (S.usuarios||[]).filter(u=>u.perfil==="Dentista"||u.perfil==="Administrador")
+      + (S.usuarios||[]).filter(atendePaciente)
           .map(u=>'<option value="'+u.id+'"'+(c.dono_id===u.id?" selected":"")+'>'
             + esc(u.nome)+'</option>').join("")
       + '</select></div></div>'
@@ -11874,9 +12150,14 @@ function renderFinanceiro(){
   $$("#finAbas button").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.fin===finAba)));
   const podeVer = pode("projecao");
   const verTaxa = pode("projecao") && !pode("soMinhas");   // taxa é da clínica, não do dentista
-  if(finAba==="despesas" && !podeVer) finAba="producao";
+  /* despesas e contas de recebimento têm chave PRÓPRIA, e não a mesma
+     de ver valores: o dentista passou a ver o painel e o fluxo do
+     trabalho dele, e não pode cair na tela de despesa da clínica nem
+     no cadastro de conta bancária. */
+  if(finAba==="cobrancas" && !pode("caixa")) finAba="producao";
+  if(finAba==="despesas" && !pode("despesas")) finAba="producao";
   if(finAba==="painel" && !podeVer) finAba="producao";
-  if(finAba==="contas" && !podeVer) finAba="producao";
+  if(finAba==="contas" && !pode("contas")) finAba="producao";
   if(finAba==="fluxo" && !podeVer) finAba="producao";
   if(finAba==="taxas" && !verTaxa) finAba="producao";
   if(finAba==="precos" && !pode("precos")) finAba="producao";
@@ -11884,6 +12165,9 @@ function renderFinanceiro(){
   const semPreco = (S.faltaSql||[]).some(f=>f.nome.includes("preço"));
   if(finAba==="painel"){
     alvo.innerHTML = htmlPainel(); ligarPainel();
+  }
+  else if(finAba==="cobrancas"){
+    alvo.innerHTML = htmlCobrancas(); ligarCobrancas();
   }
   else if(finAba==="despesas"){
     alvo.innerHTML = htmlDespesas(); ligarDespesas();
@@ -11904,9 +12188,10 @@ function renderFinanceiro(){
   }
   else                      alvo.innerHTML = htmlProducao();
   $$("#finAbas button").forEach(b=>{
-    b.hidden = (b.dataset.fin==="despesas" && !podeVer)
+    b.hidden = (b.dataset.fin==="cobrancas" && !pode("caixa"))
+            || (b.dataset.fin==="despesas" && !pode("despesas"))
             || (b.dataset.fin==="painel" && !podeVer)
-            || (b.dataset.fin==="contas" && !podeVer)
+            || (b.dataset.fin==="contas" && !pode("contas"))
             || (b.dataset.fin==="fluxo" && !podeVer)
             || (b.dataset.fin==="taxas" && !verTaxa)
             || (b.dataset.fin==="precos" && !pode("precos"));
@@ -12005,6 +12290,9 @@ const fluxoMesPor = m => (S.fluxoMes||[]).find(f=>String(f.mes).slice(0,7)===Str
 const n0 = v => Number(v||0);
 
 function htmlSaldoDoMes(){
+  /* saldo = entradas − saídas. Para quem não enxerga as saídas, isso
+     não é um saldo incompleto: é um número errado com cara de certo. */
+  if(!pode("despesas")) return "";
   const fm = S.fluxoMes;
   if(!fm) return '<div class="stage" style="margin-top:10px">'
     + '<b>As despesas ainda não estão no fluxo.</b> Enquanto '
@@ -12085,7 +12373,7 @@ function htmlFluxo(){
     <div class="card rolar"><table class="tab-rel">
       <thead><tr><th>Mês</th><th class="n">Bruto</th><th class="n">Taxas</th>
         <th class="n">Líquido</th><th class="n">Recebido</th><th class="n">Aguardando</th>
-        ${S.fluxoMes?`<th class="n">Saídas</th><th class="n">Saldo</th>`:""}
+        ${(S.fluxoMes && pode("despesas"))?`<th class="n">Saídas</th><th class="n">Saldo</th>`:""}
         <th style="width:90px">&nbsp;</th><th class="n">Parc.</th></tr></thead>
       <tbody>${meses.map(m=>{
         const rec = Math.round(100*m.recebido/Math.max(m.liquido,0.01));
@@ -12096,7 +12384,7 @@ function htmlFluxo(){
           <td class="n"><b>${fmtBRL(m.liquido)}</b></td>
           <td class="n">${m.recebido?fmtBRL(m.recebido):'<span class="vaga">—</span>'}</td>
           <td class="n">${m.previsto?fmtBRL(m.previsto):'<span class="vaga">—</span>'}</td>
-          ${S.fluxoMes?(()=>{ const f=fluxoMesPor(m.mes)||{};
+          ${(S.fluxoMes && pode("despesas"))?(()=>{ const f=fluxoMesPor(m.mes)||{};
             const sai=n0(f.saidas), sal=n0(f.saldo);
             return `<td class="n" style="color:var(--crit)">${
                 sai?"−"+fmtBRL(sai).replace("R$ ",""):'<span class="vaga">—</span>'}</td>
@@ -12112,7 +12400,7 @@ function htmlFluxo(){
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.liquido,0))}</td>
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.recebido,0))}</td>
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.previsto,0))}</td>
-        ${S.fluxoMes?`<td class="n">${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saidas),0))}</td>
+        ${(S.fluxoMes && pode("despesas"))?`<td class="n">${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saidas),0))}</td>
         <td class="n"><b>${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saldo),0))}</b></td>`:""}
         <td></td><td class="n">${meses.reduce((a,m)=>a+m.parcelas,0)}</td></tr></tfoot>
     </table></div>
@@ -13387,11 +13675,15 @@ function renderCaixa(pacId){
       <div class="tile ${r.aberto>0?"warn":""}"><b>${fmtBRL(r.aberto)}</b><span>em aberto</span></div>
       ${ver?`<div class="tile"><b>${fmtBRL(r.aReceber)}</b><span>a receber (cartão)</span></div>`:""}
     </div>
-    <div class="row" style="margin-top:10px">
-      <button class="btn primary" id="novaCobBtn">+ Lançar cobrança</button>
+    ${pode("lancaCobranca")||pode("lancaPagamento")?`<div class="row" style="margin-top:10px">
+      ${pode("lancaCobranca")?`<button class="btn primary" id="novaCobBtn">+ Lançar cobrança</button>`:""}
       ${cobs.length&&pode("lancaPagamento")?`<button class="btn" id="novoPagBtn">+ Registrar pagamento</button>`:""}
-    </div>
-    ${cobs.length&&!pode("lancaPagamento")?`<div class="stage" style="margin-top:8px">
+    </div>`:""}
+    ${!pode("lancaCobranca") && !pode("lancaPagamento")?`<div class="stage" style="margin-top:8px">
+      <b>Você acompanha, não lança.</b> Cobrança e recebimento são do caixa —
+      secretaria, financeiro ou administrador. Aqui aparece o que já foi cobrado
+      e pago nos seus atendimentos.</div>`
+    :cobs.length&&!pode("lancaPagamento")?`<div class="stage" style="margin-top:8px">
       Recebimento é lançado pelo caixa — secretaria, financeiro ou administrador.
       Aqui você acompanha o que já foi pago nas suas cobranças.</div>`:""}
     ${avisoLeitura}
@@ -13437,7 +13729,7 @@ function renderCaixa(pacId){
           <button class="minibtn" data-pagar="${c.id}">Registrar pagamento</button>`:""}
           <button class="minibtn" data-plano="${c.id}">${
             parcelasDoPlano(c.id).length?"Editar plano":"Plano de pagamento"}</button>
-        </div>`:(falta>0?`<div class="rowbtns" style="flex-basis:100%">
+        </div>`:(pode("lancaCobranca")&&falta>0?`<div class="rowbtns" style="flex-basis:100%">
           <button class="minibtn" data-pagar="${c.id}">Receber ${fmtBRL(falta)}</button></div>`:"")}
         ${quitarAberto===c.id && falta>0 ? htmlQuitar(c, falta) : ""}
         ${planoAberto===c.id ? htmlPlano(c) : ""}
@@ -13735,7 +14027,7 @@ let precoDe = null;
 function dentistasDaClinica(){
   if(S.tabelas && S.tabelas.length)
     return S.tabelas.map(t=>({id:t.dentista_id, nome:t.dentista}));
-  return (S.usuarios||[]).filter(u=>u.perfil==="Dentista" && u.ativo)
+  return (S.usuarios||[]).filter(u=>temTabelaPropria(u) && u.ativo)
     .map(u=>({id:u.id, nome:u.nome}));
 }
 function dentistaAlvo(){
@@ -14238,7 +14530,7 @@ function ligarPrecos(){
    recomposta aqui para a tela do administrador ter o que mostrar. */
 function sincronizarTabelas(){
   if(MODO==="nuvem") return;
-  S.tabelas = (S.usuarios||[]).filter(u=>u.perfil==="Dentista" && u.ativo).map(u=>({
+  S.tabelas = (S.usuarios||[]).filter(u=>temTabelaPropria(u) && u.ativo).map(u=>({
     dentista_id:u.id, dentista:u.nome,
     valor_hora: valorHoraDe(u.id),
     procedimentos:(S.precoProc||[]).filter(x=>x.dentista_id===u.id && x.ativo!==false).length,
@@ -14942,6 +15234,8 @@ window.MD = {
   renderAll, renderHoje, renderCaixa, renderFinanceiro, htmlAgendaDeHoje,
   htmlPainel, htmlContas, htmlQuitar, htmlPlano, htmlPlanoResumo,
   htmlDespesas, htmlSaldoDoMes, htmlDespesasDoPainel, htmlFluxo,
+  htmlCobrancas, linhasCobranca, abrirForm, acoesDoEvento,
+  get cobFiltro(){ return cobFiltro; }, set cobFiltro(v){ cobFiltro = v; },
   htmlPedidosParceiro, htmlPedidoForm, htmlCartaoPedido, renderParceiros,
   vencimentoPrevisto, pedidosFiltrados, itensDoPedido, resumoParceiro,
   get parcAba(){ return parcAba; }, set parcAba(v){ parcAba = v; },
