@@ -1693,7 +1693,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v70 · 19/11/2026";
+const VERSAO = "v71 · 19/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -4968,13 +4968,21 @@ function raioOcl(fdi, th){
 function svgDenteVest(fdi, cx, colo, dirY, estados, esperado){
   const faces = facesDe(fdi);
   const vest = faces[1][0];
+  /* Dente extraído ou ausente fica TRANSPARENTE, só o contorno fraco:
+     pedido do Dr. Leonardo, e é o certo — um dente que não está na boca
+     não pode ter a mesma presença visual de um que está. O X por cima
+     diz o que aconteceu; o vazio por baixo diz o que há hoje. */
+  const cond = condicaoDoDente(fdi, estados);
+  const saiu = denteSaiu(cond);
   const px = (u,y) => [(cx + u*ESC2D).toFixed(1), (colo + dirY*y*ESC2D).toFixed(1)].join(",");
-  const cor = f => { const e = estados[fdi] && estados[fdi][f];
+  const cor = f => { if(saiu) return "transparent";
+    const e = estados[fdi] && estados[fdi][f];
     return e ? corCondicao(e.condicao) : (esperado ? ESMALTE_2D : "transparent"); };
-  const tr = traco2D(esperado);
+  const tr = saiu ? TRACO_2D_FRACO : traco2D(esperado);
   const g = [];
   raizesVestibular(fdi).forEach(r=>{
-    g.push(`<polygon points="${r.map(([u,y])=>px(u,y)).join(" ")}" fill="${corRaiz2D(fdi, estados, esperado)}"
+    g.push(`<polygon points="${r.map(([u,y])=>px(u,y)).join(" ")}" fill="${
+      saiu ? "transparent" : corRaiz2D(fdi, estados, esperado)}"
       stroke="${tr}" stroke-width=".9" stroke-linejoin="round"
       data-dente="${fdi}" class="face"/>`);
   });
@@ -4987,24 +4995,11 @@ function svgDenteVest(fdi, cx, colo, dirY, estados, esperado){
     x2="${(cx+a*ESC2D).toFixed(1)}" y2="${colo.toFixed(1)}" stroke="${tr}"
     stroke-width=".8" opacity=".8" pointer-events="none"/>`);
 
-  /* O X do dente extraído — é assim que se anota no papel desde sempre,
-     e é o que o dentista pediu. Cobre coroa E raiz, porque o que saiu
-     foi o dente inteiro. */
-  const cond = condicaoDoDente(fdi, estados);
-  if(denteSaiu(cond) || cond === "extracao_indicada"){
-    const meia = M.md/2*1.05*ESC2D;
-    const yCo = colo + dirY*(M.hc*0.98)*ESC2D;     // ponta da coroa
-    const yRa = colo - dirY*(M.hr*0.62)*ESC2D;     // ápice da raiz
-    const indicada = cond === "extracao_indicada";
-    const corX = indicada ? "var(--warn)" : "var(--crit)";
-    const X = [[cx-meia, yRa, cx+meia, yCo], [cx+meia, yRa, cx-meia, yCo]];
-    X.forEach(([x1,y1,x2,y2])=>{
-      g.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}"
-        x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${corX}"
-        stroke-width="2.1" stroke-linecap="round" pointer-events="none"
-        ${indicada?'stroke-dasharray="4 3"':""} opacity=".92"/>`);
-    });
-  }
+  /* AQUI havia um SEGUNDO X. Eram dois: este, da coroa ao ápice, e o de
+     marcaDenteInteiro(), que cobre a coluna inteira do dente — os dois
+     vermelhos, da mesma espessura, quase no mesmo lugar. Na tela saía um
+     X borrado e grosso, que o Dr. Leonardo viu e relatou. Ficou só o de
+     marcaDenteInteiro(), que é o que marca também a vista oclusal. */
 
   /* Implante: no lugar do dente, um parafuso. Rosca desenhada como
      zigue-zague no corpo e plataforma reta no topo — é o que distingue
@@ -5070,9 +5065,11 @@ function svgDenteOcl(fdi, cx, cy, vestParaCima, estados, esperado){
   // ângulo 90° é o topo da tela; a vestibular vai para cima na arcada
   // superior e para baixo na inferior
   const giro = vestParaCima ? 0 : 180;
-  const cor = f => { const e = estados[fdi] && estados[fdi][f];
+  const saiu = denteSaiu(condicaoDoDente(fdi, estados));
+  const cor = f => { if(saiu) return "transparent";
+    const e = estados[fdi] && estados[fdi][f];
     return e ? corCondicao(e.condicao) : (esperado ? ESMALTE_2D : "transparent"); };
-  const tr = traco2D(esperado);
+  const tr = saiu ? TRACO_2D_FRACO : traco2D(esperado);
   const K = 0.46;                       // tamanho do miolo
 
   const ponto = (th, k) => {
@@ -5101,7 +5098,9 @@ function svgDenteOcl(fdi, cx, cy, vestParaCima, estados, esperado){
   const mio=[]; for(let a=0;a<360;a+=7.5) mio.push(ponto(a*Math.PI/180, K));
   g.push(`<polygon points="${mio.join(" ")}" fill="${cor(oclu)}" stroke="${tr}"
     stroke-width=".9" data-f="${fdi}:${oclu}" class="face"/>`);
-  g.push(relevoOcl(fdi, cx, cy));
+  /* sulcos e cúspides só em dente que existe: relevo dentro de um
+     contorno vazio parecia dente meio apagado, não dente ausente */
+  if(!saiu) g.push(relevoOcl(fdi, cx, cy));
   return g.join("");
 }
 
@@ -5125,16 +5124,24 @@ function relevoOcl(fdi, cx, cy){
 
 /* marca de dente perdido / condição do dente inteiro, por cima das
    duas vistas */
+/* O ÚNICO X do odontograma 2D. Vale para a coluna inteira do dente —
+   coroa, raiz e vista oclusal — porque o que saiu foi o dente todo.
+   Extração INDICADA entra aqui também, tracejada e na cor de alerta: é
+   plano de tratamento, não fato consumado. */
 function marcaDenteInteiro(fdi, estados, cx, yTopo, yBase){
   const est = estados[fdi] || {};
-  const perdido = Object.values(est).some(e=>e.condicao==="ausente"||e.condicao==="extraido");
+  const cond = condicaoDoDente(fdi, estados);
+  const perdido = denteSaiu(cond);
+  const indicada = cond === "extracao_indicada";
   const inteiro = est["todo"];
   const M = medidaDe(fdi), r = M.md/2*ESC2D*1.05;
   let out = "";
-  if(perdido){
+  if(perdido || indicada){
     out += `<path d="M${(cx-r).toFixed(1)},${yTopo.toFixed(1)} L${(cx+r).toFixed(1)},${yBase.toFixed(1)}
       M${(cx+r).toFixed(1)},${yTopo.toFixed(1)} L${(cx-r).toFixed(1)},${yBase.toFixed(1)}"
-      stroke="var(--crit)" stroke-width="2.2" fill="none" opacity=".85" pointer-events="none"/>`;
+      stroke="${indicada ? "var(--warn)" : "var(--crit)"}" stroke-width="2.2" fill="none"
+      stroke-linecap="round" ${indicada ? 'stroke-dasharray="5 4"' : ""}
+      opacity=".88" pointer-events="none"/>`;
   }
   if(inteiro && !perdido){
     out += `<rect x="${(cx-r-2).toFixed(1)}" y="${(yTopo-2).toFixed(1)}"
