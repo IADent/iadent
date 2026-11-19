@@ -426,6 +426,23 @@ a{color:var(--accent)}
 .modal{width:100%;max-width:392px;background:var(--surface);border:1px solid var(--line);
   border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:20px;display:flex;flex-direction:column;gap:14px}
 .modal h2{font-size:17px}
+/* bloco de dados da NF: fonte mono para o conferente bater campo a campo,
+   e seleção fácil para quem preferir copiar com o mouse */
+.nf-bloco{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+  line-height:1.65;white-space:pre-wrap;word-break:break-word;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin:0;
+  user-select:all;-webkit-user-select:all;max-height:40vh;overflow:auto}
+/* o "Abrir o Emissor Nacional" é link de verdade (abre em outra aba),
+   mas tem que PARECER botão como os vizinhos — sem sublinhado e com o
+   texto centrado na caixa */
+a.btn{text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+.nf-falta{color:var(--warn);background:var(--warn-soft);border-radius:9px;
+  padding:9px 11px;font-size:12px;line-height:1.5;margin-top:10px}
+.nf-falta b{font-weight:700}
+.nf-linha{display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+  padding:9px 0;border-bottom:1px solid var(--line)}
+.nf-linha:last-child{border-bottom:0}
+.nf-linha .cresce{flex:1;min-width:150px}
 .modal .sub{font-size:13px;color:var(--ink-2);margin:0}
 /* Montserrat é mais larga que a sem-serifa anterior: sem nowrap e sem
    rolagem, "Taxas da maquininha" quebrava em duas linhas e desalinhava
@@ -943,9 +960,29 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
     display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto 1fr;
     grid-template-areas:"top top" "nav conteudo";
   }
-  .topbar{grid-area:top;padding:12px 22px}
+  /* BARRA SUPERIOR NO COMPUTADOR — o celular dita o tamanho base, e no
+     monitor ele fica pequeno demais.
+
+     Os três botões do canto (configurações, trocar usuário, sair) eram
+     só o caractere, com 3px de respiro: 13 × 13 pixels de alvo. A
+     recomendação de alvo tocável é 24 px, e isso vale igual para o
+     mouse — alvo pequeno custa mira, não só dedo. Agora são círculos
+     de 30 px com realce ao passar o mouse, que também diz que são
+     botões: antes pareciam enfeite ao lado do nome.
+
+     No Windows o mesmo CSS sai menor do que no Mac, porque o sistema
+     não aplica o mesmo arredondamento de fonte. Por isso o aumento
+     vale a partir de 720px, onde sobra espaço de qualquer jeito. */
+  .topbar{grid-area:top;padding:13px 22px;gap:12px}
   .topbar .logo svg{width:36px;height:36px}
-  .userchip{max-width:none}
+  .topbar .logo .txt b{font-size:18.5px}
+  .topbar .logo .txt span{font-size:9.5px}
+  .userchip{max-width:none;font-size:13px;gap:6px;padding:5px 6px 5px 13px}
+  .userchip button{width:28px;height:28px;padding:0;border-radius:50%;
+    font-size:14.5px;display:grid;place-items:center}
+  .userchip button:hover{background:var(--surface-2);color:var(--ink)}
+  .iconbtn{width:36px;height:36px;font-size:15px}
+  .iconbtn:hover{background:var(--surface-2);color:var(--ink)}
 
   .tabs{grid-area:nav;position:static;display:block;pointer-events:auto}
   .tabs .inner{
@@ -966,6 +1003,16 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 }
 
 @media (min-width:1100px){
+  /* monitor de verdade: mais um degrau, e o subtítulo da marca volta a
+     ser legível em vez de um friso cinza */
+  .topbar{padding:15px 28px}
+  .topbar .logo svg{width:40px;height:40px}
+  .topbar .logo .txt b{font-size:20px}
+  .topbar .logo .txt span{font-size:10px;letter-spacing:.15em}
+  .userchip{font-size:14px;gap:7px;padding:6px 7px 6px 16px}
+  .userchip button{width:31px;height:31px;font-size:16px}
+  .iconbtn{width:40px;height:40px;font-size:17px}
+
   .tabs .inner{width:232px;padding:16px 12px}
   .tab{flex-direction:row;justify-content:flex-start;gap:11px;padding:11px 12px;font-size:13.5px}
   .tab svg{width:19px;height:19px}
@@ -1308,6 +1355,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <button role="tab" aria-selected="false" data-fin="fluxo">Fluxo de caixa</button>
         <button role="tab" aria-selected="false" data-fin="cobrancas">Cobranças</button>
         <button role="tab" aria-selected="false" data-fin="recebidos">Recebimentos</button>
+        <button role="tab" aria-selected="false" data-fin="notas">Notas fiscais</button>
         <button role="tab" aria-selected="false" data-fin="despesas">Despesas</button>
         <button role="tab" aria-selected="false" data-fin="producao">Produção</button>
         <button role="tab" aria-selected="false" data-fin="precos">Preços</button>
@@ -1456,6 +1504,15 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
     <p class="sub">Primeiro a vencer, primeiro a sair.</p>
     <div id="loteModalLista"></div>
     <button class="btn primary wide" id="loteModalOk">Entendi</button>
+  </div>
+</div>
+<div class="modal-fundo" id="nfModal" hidden>
+  <div class="modal-caixa" style="max-width:580px" role="dialog" aria-modal="true" aria-labelledby="nfModalTit">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h2 id="nfModalTit" style="flex:1">Dados para a nota fiscal</h2>
+      <button class="iconbtn" id="nfModalX" aria-label="Fechar">✕</button>
+    </div>
+    <div id="nfModalCorpo"></div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -1623,7 +1680,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v66 · 19/11/2026";
+const VERSAO = "v67 · 19/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1692,6 +1749,7 @@ const DB = {
      essencial (valor, forma, paciente) nunca é acessório, então se o erro
      for em um desses a falha sobe como antes. */
   COLUNAS_OPCIONAIS: new Set(["maquininha_id","nota_fiscal","nota_numero",
+                              "nota_emitida_em",
                               "bandeira","nsu","adquirente","observacao",
                               "conta_id","plano_descricao","pedido_id"]),
   async inserirTolerante(tabela, corpo, prefer){
@@ -1836,8 +1894,10 @@ const DB = {
     if(!meu.ativo || meu.status === "inativo")
       throw new Error("Este acesso está desativado. Fale com o administrador.");
     DB.clinica = meu.clinica_id; DB.meuId = meu.id;
+    /* cro vem na consulta desde sempre e era descartado aqui. A nota
+       fiscal do paciente precisa dele: convênio glosa nota sem CRO. */
     S.usuarios = eu.map(u=>({id:u.id, nome:u.nome, email:"", perfil:PERFIL_DB2APP[u.perfil],
-      ativo:u.ativo, nuvem:true}));
+      cro:u.cro||"", ativo:u.ativo, nuvem:true}));
     return {id:meu.id, nome:meu.nome, email:"", perfil:PERFIL_DB2APP[meu.perfil], ativo:true, nuvem:true};
   },
 
@@ -2156,7 +2216,10 @@ const DB = {
           "vencimento,status,descricao,plano_descricao,emitida_em&order=emitida_em.desc&limit=400"),
         DB.rest("GET","pagamentos?select=id,cobranca_id,valor,forma_enum,parcelas,antecipado,"+
           "adquirente,bandeira,maquininha_id,conta_id,nsu,taxa,taxa_pct,liquido,pago_em,"+
-          "nota_fiscal,nota_numero,observacao&order=pago_em.desc&limit=600")
+          "nota_fiscal,nota_numero,nota_emitida_em,observacao&order=pago_em.desc&limit=600")
+          .catch(()=>DB.rest("GET","pagamentos?select=id,cobranca_id,valor,forma_enum,parcelas,"+
+            "antecipado,adquirente,bandeira,maquininha_id,conta_id,nsu,taxa,taxa_pct,liquido,"+
+            "pago_em,nota_fiscal,nota_numero,observacao&order=pago_em.desc&limit=600"))
       ]);
       S.cobrancas = cob.map(c=>({...c, pac:UID.pacRev[c.paciente_id]||""}));
       S.pagamentos = pag;
@@ -2294,6 +2357,7 @@ const DB = {
     if(d.dia) corpo.pago_em = d.dia + "T12:00:00-03:00";
     corpo.nota_fiscal = !!d.nf;
     if(d.nfNum) corpo.nota_numero = d.nfNum;
+    if(d.nfData) corpo.nota_emitida_em = d.nfData;
     if(d.conta) corpo.conta_id = d.conta;
     if(d.taxa !== null && d.taxa !== undefined && d.taxa !== "") corpo.taxa = d.taxa;
     const r = await DB.inserirTolerante("pagamentos", corpo, "return=representation");
@@ -6904,9 +6968,12 @@ function abrirAvisoLote(ids){
 $("#loteModalOk").addEventListener("click", ()=>{ $("#loteModal").hidden = true; });
 $("#exameModalX").addEventListener("click", ()=>{ $("#exameModal").hidden = true; });
 $("#exameModal").addEventListener("click", ev=>{ if(ev.target.id==="exameModal") $("#exameModal").hidden=true; });
+$("#nfModalX").addEventListener("click", fecharNF);
+$("#nfModal").addEventListener("click", ev=>{ if(ev.target.id==="nfModal") fecharNF(); });
 $("#loteModal").addEventListener("click", ev=>{ if(ev.target.id==="loteModal") $("#loteModal").hidden=true; });
 document.addEventListener("keydown", ev=>{
   if(ev.key!=="Escape") return;
+  if(!$("#nfModal").hidden){ fecharNF(); return; }
   if(!$("#exameModal").hidden){ $("#exameModal").hidden=true; return; }
   if(!$("#loteModal").hidden) $("#loteModal").hidden=true;
 });
@@ -12156,6 +12223,7 @@ function renderFinanceiro(){
      no cadastro de conta bancária. */
   if(finAba==="cobrancas" && !pode("caixa")) finAba="producao";
   if(finAba==="despesas" && !pode("despesas")) finAba="producao";
+  if(finAba==="notas" && !pode("lancaPagamento")) finAba="producao";
   if(finAba==="painel" && !podeVer) finAba="producao";
   if(finAba==="contas" && !pode("contas")) finAba="producao";
   if(finAba==="fluxo" && !podeVer) finAba="producao";
@@ -12171,6 +12239,9 @@ function renderFinanceiro(){
   }
   else if(finAba==="despesas"){
     alvo.innerHTML = htmlDespesas(); ligarDespesas();
+  }
+  else if(finAba==="notas"){
+    alvo.innerHTML = htmlNotas(); ligarNotas();
   }
   else if(finAba==="contas"){
     contasEm = "financeiro";
@@ -12190,6 +12261,7 @@ function renderFinanceiro(){
   $$("#finAbas button").forEach(b=>{
     b.hidden = (b.dataset.fin==="cobrancas" && !pode("caixa"))
             || (b.dataset.fin==="despesas" && !pode("despesas"))
+            || (b.dataset.fin==="notas" && !pode("lancaPagamento"))
             || (b.dataset.fin==="painel" && !podeVer)
             || (b.dataset.fin==="contas" && !pode("contas"))
             || (b.dataset.fin==="fluxo" && !podeVer)
@@ -13740,6 +13812,8 @@ function renderCaixa(pacId){
   const bp=$("#novoPagBtn"); if(bp) bp.addEventListener("click", ()=>formPagamento(pacId, cobs[0].id));
   box.querySelectorAll("button[data-pagar]").forEach(b=>
     b.addEventListener("click", ()=>formPagamento(pacId, b.dataset.pagar)));
+  box.querySelectorAll("button[data-nf]").forEach(b=>
+    b.addEventListener("click", ()=>abrirNF(b.dataset.nf, ()=>renderCaixa(pacId))));
   ligarQuitacao(pacId, box);
   box.querySelectorAll("button[data-comp]").forEach(b=>b.addEventListener("click", ()=>{
     compAberta = compAberta === b.dataset.comp ? null : b.dataset.comp;
@@ -13761,7 +13835,9 @@ function htmlPagamento(pg, ver){
         n>1?` ${n}×`:""}${pg.antecipado?" · antecipado":""}</span>
       ${pg.bandeira?`<span class="pill neutral">${pg.bandeira}</span>`:""}
       ${nomeConta(pg.conta_id)?`<span class="pill neutral">${esc(nomeConta(pg.conta_id))}</span>`:""}
-      ${pg.nota_fiscal?`<span class="pill ok">NF${pg.nota_numero?" "+esc(pg.nota_numero):""}</span>`:""}
+      ${pg.nota_fiscal?`<span class="pill ok">NF${pg.nota_numero?" "+esc(pg.nota_numero):""}</span>`
+        :`<span class="pill neutral">sem NF</span>`}
+      <button class="minibtn" data-nf="${pg.id}">${pg.nota_fiscal?"Ver dados da NF":"Dados para a NF"}</button>
       <span class="mono" style="font-size:11px;color:var(--ink-3)">${fmtData((pg.pago_em||"").slice(0,10))}${
         pg.nsu?" · NSU "+pg.nsu:""}</span>
     </div>
@@ -13773,6 +13849,319 @@ function htmlPagamento(pg, ver){
       ${prox?` · próxima em ${fmtData(prox.previsao_credito)}`:" · tudo recebido"}
     </div>`:""}
   </div>`;
+}
+
+/* ===================== NOTA FISCAL DO PACIENTE =====================
+
+   O IADent NÃO emite a nota, e isso é uma decisão, não uma falta.
+   Emitir por API exige certificado digital e-CNPJ (ICP-Brasil, mTLS),
+   que custa dinheiro e é chave fiscal da empresa — decisão do dono.
+
+   O que o sistema faz é tirar o trabalho manual de JUNTAR os dados,
+   que é onde o tempo se perde na recepção e onde nasce a nota errada
+   que o convênio glosa depois. O bloco sai pronto para colar no
+   Emissor Nacional, e o número da nota volta amarrado ao pagamento.
+
+   Contexto de 2026: São Paulo aderiu ao padrão nacional e, para
+   optante do Simples, a emissão pelo Emissor Nacional é obrigatória
+   desde 01/09/2026 (Resolução CGSN nº 189/2026). O sistema municipal
+   antigo ficou só para consulta. */
+const NFSE_EMISSOR = "https://www.nfse.gov.br/EmissorNacional";
+
+/* o CRO é digitado à mão no cadastro da equipe: uns escrevem "CRO-SP
+   12345", outros só "12345". Sem isto saía "CRO CRO-SP 12345" na nota. */
+function rotuloCro(cro){
+  const t = String(cro||"").trim();
+  return /^cro\b/i.test(t) ? t : "CRO "+t;
+}
+
+function croDe(id){
+  if(!id) return "";
+  const u = (S.usuarios||[]).find(x=>x.id===id);
+  if(u && u.cro) return u.cro;
+  const e = ((typeof cfg!=="undefined" && cfg.equipe) || []).find(x=>x.id===id);
+  return (e && e.cro) || "";
+}
+
+/* Reúne tudo o que a nota pede, de quatro tabelas, numa estrutura só.
+   Devolve null quando o pagamento não existe mais na memória. */
+function dadosNF(pgId){
+  const pg = (S.pagamentos||[]).find(x=>x.id===pgId);
+  if(!pg) return null;
+  const cob = (S.cobrancas||[]).find(c=>c.id===pg.cobranca_id) || {};
+  const pac = (S.pacientes||[]).find(p=>p.id===cob.pac) || {};
+  const at  = cob.atendimento_id
+    ? (S.atendimentos||[]).find(a=>UID.atd[a.id]===cob.atendimento_id) : null;
+  const cl  = (typeof cfg!=="undefined" && cfg.clinica) || {};
+  const dent = (S.usuarios||[]).find(u=>u.id===cob.dentista_id) || {};
+  const regiao = at && at.regiao && at.regiao !== "—" ? at.regiao : "";
+  const servico = [cob.descricao || (at && at.proc) || "Serviço odontológico",
+                   regiao ? "região "+regiao : ""].filter(Boolean).join(" — ");
+  const cnpjCru = String(cl.cnpj||"").replace(/\D/g,"");
+  return {
+    id: pg.id,
+    pacId: cob.pac || "",
+    prestador: cl.razao_social || cl.nome || "",
+    cnpj: cnpjCru ? fmtCnpj(cnpjCru) : "",
+    tomador: pac.nome || "",
+    cpf: pac.cpf || "",
+    servico: servico,
+    profissional: dent.nome || "",
+    cro: croDe(cob.dentista_id),
+    data: (pg.pago_em||"").slice(0,10),
+    valor: Number(pg.valor||0),
+    numero: pg.nota_numero || "",
+    emitidaEm: pg.nota_emitida_em || "",
+    emitida: !!pg.nota_fiscal
+  };
+}
+
+/* O texto que vai para a área de transferência. Uma linha por campo,
+   na ordem em que o Emissor Nacional pergunta. */
+function textoNF(d){
+  return [
+    "Prestador: "      + (d.prestador || "(falta o cadastro da clínica)"),
+    "CNPJ: "           + (d.cnpj      || "(falta o CNPJ da clínica)"),
+    "Tomador: "        + (d.tomador   || "(falta o nome do paciente)"),
+    "CPF do tomador: " + (d.cpf       || "(falta o CPF no cadastro)"),
+    "Data do serviço: "+ fmtData(d.data),
+    "Valor: "          + fmtBRL(d.valor),
+    "Discriminação: "  + d.servico
+      + (d.profissional ? " — profissional "+d.profissional : "")
+      + (d.cro ? " — "+rotuloCro(d.cro) : "")
+  ].join("\n");
+}
+
+/* O que falta para a nota não ser glosada. Separado do texto de
+   propósito: o aviso é para a pessoa, o texto é para o emissor. */
+function faltasNF(d){
+  const f = [];
+  if(!d.cpf)       f.push("<b>CPF do paciente</b> — sem ele o convênio recusa o reembolso. Complete na ficha.");
+  if(!d.cnpj)      f.push("<b>CNPJ da clínica</b> — complete em Configurações.");
+  if(!d.prestador) f.push("<b>Razão social da clínica</b> — complete em Configurações.");
+  if(!d.cro)       f.push("<b>CRO do profissional</b> — complete no cadastro da equipe.");
+  return f;
+}
+
+let nfAlvo = null, nfApos = null;
+
+async function abrirNF(pgId, apos){
+  const m = $("#nfModal"), corpo = $("#nfModalCorpo");
+  if(!m || !corpo) return;
+  nfAlvo = pgId; nfApos = apos || null;
+  m.hidden = false;
+  corpo.innerHTML = '<div class="empty">Carregando os dados da clínica…</div>';
+  /* o CNPJ e a razão social moram em cfg.clinica, que só é lido quando
+     alguém abre Configurações. Aqui a nota precisa deles antes disso. */
+  if(MODO==="nuvem" && (typeof cfg==="undefined" || !cfg.clinica)){
+    try{ await CFG.carregar(); }catch(e){ /* segue sem: o aviso avisa */ }
+  }
+  if(nfAlvo !== pgId) return;        // fechou ou trocou enquanto carregava
+  renderNF();
+}
+
+function fecharNF(){
+  const m = $("#nfModal"); if(m) m.hidden = true;
+  nfAlvo = null; nfApos = null;
+}
+
+function renderNF(){
+  const corpo = $("#nfModalCorpo"); if(!corpo || !nfAlvo) return;
+  const d = dadosNF(nfAlvo);
+  if(!d){ corpo.innerHTML = '<div class="empty">Pagamento não encontrado.</div>'; return; }
+  const faltas = faltasNF(d);
+  corpo.innerHTML = `
+    <div class="eyebrow">${esc(d.tomador||"paciente")} · ${fmtBRL(d.valor)} · ${fmtData(d.data)}</div>
+    <p class="sub" style="margin:8px 0 10px">Copie e cole no Emissor Nacional. O IADent não emite a nota.</p>
+    <pre class="nf-bloco" id="nfTexto">${esc(textoNF(d))}</pre>
+    ${faltas.length?`<div class="nf-falta">Confira antes de emitir:<ul style="margin:6px 0 0 16px">
+      ${faltas.map(x=>`<li>${x}</li>`).join("")}</ul></div>`:""}
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" style="flex:1" id="nfCopiar">Copiar os dados</button>
+      <a class="btn" id="nfAbrir" href="${NFSE_EMISSOR}" target="_blank" rel="noopener">Abrir o Emissor Nacional</a>
+    </div>
+    <div class="eyebrow" style="margin-top:18px">Depois de emitir, registre aqui</div>
+    <div class="grid2" style="margin-top:8px">
+      <div class="field"><label for="nfNumero">Número da nota</label>
+        <input id="nfNumero" class="mono" value="${esc(d.numero)}" placeholder="ex.: 000123"></div>
+      <div class="field"><label for="nfData">Data de emissão</label>
+        <input id="nfData" type="date" value="${esc(d.emitidaEm||hojeISO())}" max="${hojeISO()}"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" style="flex:1" id="nfSalvar">${
+        d.emitida?"Atualizar o registro":"Marcar como emitida"}</button>
+      ${d.emitida?'<button class="btn" id="nfDesmarcar">Desmarcar</button>':""}
+    </div>`;
+
+  $("#nfCopiar").addEventListener("click", ()=>copiarNF(textoNF(d)));
+  $("#nfSalvar").addEventListener("click", ()=>salvarNF(true));
+  const des = $("#nfDesmarcar");
+  if(des) des.addEventListener("click", ()=>{
+    if(confirm("Desmarcar a nota deste pagamento? O número registrado será apagado.")) salvarNF(false);
+  });
+}
+
+/* clipboard falha em contexto sem permissão (e em file://). Quando
+   falha, selecionar o bloco é melhor do que um erro: a pessoa dá
+   Ctrl+C e segue. Dizer "copiado" sem ter copiado seria pior. */
+async function copiarNF(txt){
+  try{
+    await navigator.clipboard.writeText(txt);
+    toast("Dados copiados. Cole no Emissor Nacional.");
+  }catch(e){
+    const el = $("#nfTexto");
+    if(el && window.getSelection){
+      const r = document.createRange(); r.selectNodeContents(el);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      toast("Não consegui copiar sozinho — o texto está selecionado, use Ctrl+C.");
+    }else toast("Não consegui copiar. Selecione o texto e use Ctrl+C.");
+  }
+}
+
+async function salvarNF(emitida){
+  const pgId = nfAlvo; if(!pgId) return;
+  const numero = emitida && $("#nfNumero") ? ($("#nfNumero").value.trim()||null) : null;
+  const dia    = emitida && $("#nfData")   ? ($("#nfData").value||null) : null;
+  const campos = {nota_fiscal: !!emitida, nota_numero: numero, nota_emitida_em: dia};
+  if(MODO==="nuvem"){
+    const ok = await naNuvem(async ()=>{
+      await DB.escreverTolerante("PATCH","pagamentos?id=eq."+pgId, campos);
+      await DB.carregarCaixa();
+    }, "nota fiscal");
+    if(!ok) return;
+  }else{
+    const pg = (S.pagamentos||[]).find(x=>x.id===pgId);
+    if(pg) Object.assign(pg, campos);
+    save();
+  }
+  toast(emitida ? "Nota registrada neste pagamento." : "Nota desmarcada.");
+  fecharNF();
+  if(nfApos) nfApos();
+  renderFinanceiro();
+}
+
+/* ---------- aba Notas fiscais, no Financeiro ---------- */
+
+function pagamentosSemNF(){
+  const visiveis = new Set(cobrancasVisiveis().map(c=>c.id));
+  return (S.pagamentos||[])
+    .filter(p=>visiveis.has(p.cobranca_id) && !p.nota_fiscal)
+    .map(p=>dadosNF(p.id)).filter(Boolean)
+    .sort((a,b)=> a.data < b.data ? 1 : -1);
+}
+
+function htmlNotas(){
+  const pend = pagamentosSemNF();
+  const total = pend.reduce((a,x)=>a+x.valor, 0);
+  const semCpf = pend.filter(x=>!x.cpf).length;
+  const anos = Array.from(new Set((S.pagamentos||[])
+    .map(p=>(p.pago_em||"").slice(0,4)).filter(Boolean)))
+    .sort().reverse();
+  if(!anos.length) anos.push(String(new Date().getFullYear()));
+  return `
+  <div class="card">
+    <div class="eyebrow">Pagamentos recebidos sem nota fiscal</div>
+    <div class="tiles" style="margin-top:10px">
+      <div class="tile"><b>${pend.length}</b><span>Pendentes</span></div>
+      <div class="tile"><b>${fmtBRL(total)}</b><span>Valor sem nota</span></div>
+      <div class="tile"><b>${semCpf}</b><span>Sem CPF na ficha</span></div>
+    </div>
+    <p class="sub" style="margin-top:10px">O IADent não emite a nota: ele monta os dados
+      prontos para colar no <b>Emissor Nacional</b> (nfse.gov.br), que é gratuito e não pede
+      certificado digital. Para optante do Simples em São Paulo, emitir por ali é obrigatório
+      desde 01/09/2026.</p>
+    ${semCpf?`<div class="nf-falta">${semCpf} ${semCpf===1?"pagamento está":"pagamentos estão"}
+      sem CPF no cadastro do paciente. Nota sem CPF do tomador não serve para reembolso de
+      convênio — complete a ficha antes de emitir.</div>`:""}
+    <div style="margin-top:12px">
+      ${pend.length ? pend.map(d=>`
+        <div class="nf-linha">
+          <div class="cresce">
+            <b>${esc(d.tomador||"—")}</b>
+            ${d.cpf?`<span class="mono" style="font-size:11px;color:var(--ink-3)"> ${esc(d.cpf)}</span>`
+                   :`<span class="pill warn">sem CPF</span>`}
+            <div style="font-size:12px;color:var(--ink-2)">${esc(d.servico)}</div>
+          </div>
+          <span class="mono" style="font-size:12px">${fmtData(d.data)}</span>
+          <b>${fmtBRL(d.valor)}</b>
+          <button class="minibtn" data-nfpend="${d.id}">Dados para a NF</button>
+        </div>`).join("")
+        : '<div class="empty">Todo pagamento recebido já tem nota registrada.</div>'}
+    </div>
+    ${pend.length?`<div class="row" style="margin-top:12px">
+      <button class="btn" id="nfCsv">Baixar a lista (CSV)</button></div>`:""}
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div class="eyebrow">DMED — declaração de serviços de saúde</div>
+    <p class="sub" style="margin-top:8px">Clínica odontológica pessoa jurídica é obrigada a
+      entregar a DMED até <b>27/02</b> do ano seguinte, com CPF do paciente e valor recebido.
+      A multa por atraso é de R$ 500 por mês para optante do Simples. O relatório abaixo sai
+      por <b>regime de caixa</b> — o que entrou no ano — que é como a DMED pede.</p>
+    <div class="row" style="margin-top:10px;align-items:flex-end">
+      <div class="field" style="max-width:150px"><label for="dmedAno">Ano-calendário</label>
+        <select id="dmedAno">${anos.map(a=>`<option>${a}</option>`).join("")}</select></div>
+      <button class="btn primary" id="dmedBtn">Gerar o relatório</button>
+    </div>
+    <div id="dmedSaida" style="margin-top:12px"></div>
+  </div>`;
+}
+
+function ligarNotas(){
+  $$("#finPainel [data-nfpend]").forEach(b=>
+    b.addEventListener("click", ()=>abrirNF(b.dataset.nfpend, ()=>renderFinanceiro())));
+  const csv = $("#nfCsv");
+  if(csv) csv.addEventListener("click", ()=>baixarCSV("pagamentos-sem-nota",
+    [["Paciente","CPF","Serviço","Profissional","CRO","Data","Valor"]].concat(
+      pagamentosSemNF().map(d=>[d.tomador, d.cpf, d.servico, d.profissional, d.cro, d.data, d.valor]))));
+  const bt = $("#dmedBtn");
+  if(bt) bt.addEventListener("click", gerarDmed);
+}
+
+async function gerarDmed(){
+  const saida = $("#dmedSaida"), ano = Number($("#dmedAno").value);
+  if(!saida) return;
+  if(MODO!=="nuvem"){
+    saida.innerHTML = '<div class="empty">O relatório da DMED lê o banco e só funciona no modo nuvem.</div>';
+    return;
+  }
+  saida.innerHTML = '<div class="empty">Somando os recebimentos do ano…</div>';
+  let linhas;
+  try{ linhas = await DB.rest("POST","rpc/rel_dmed",{p_ano:ano}); }
+  catch(e){
+    saida.innerHTML = `<div class="nf-falta">Não consegui gerar: ${esc(e.message||"falha")}.
+      Se a mensagem fala em função inexistente, falta rodar
+      <b>ATUALIZAR-NOTA-DO-PACIENTE.sql</b> no banco.</div>`;
+    return;
+  }
+  if(!linhas.length){
+    saida.innerHTML = '<div class="empty">Nenhum recebimento em '+ano+'.</div>';
+    return;
+  }
+  const tot = linhas.reduce((a,x)=>a+Number(x.valor_recebido||0), 0);
+  const semCpf = linhas.filter(x=>!x.cpf).length;
+  saida.innerHTML = `
+    ${semCpf?`<div class="nf-falta">${semCpf} ${semCpf===1?"paciente está":"pacientes estão"}
+      sem CPF. A DMED exige o CPF: complete as fichas antes de entregar.</div>`:""}
+    <div class="rolar"><table class="tab-rel"><thead><tr>
+      <th>Paciente</th><th>CPF</th><th>Nascimento</th>
+      <th class="n">Recebido</th><th class="n">Com nota</th>
+    </tr></thead><tbody>
+    ${linhas.map(x=>`<tr>
+      <td>${esc(x.paciente||"—")}</td>
+      <td class="mono">${x.cpf?esc(fmtCpf(x.cpf)):'<span class="pill warn">falta</span>'}</td>
+      <td class="mono">${x.nascimento?fmtData(x.nascimento):"—"}</td>
+      <td class="n">${fmtBRL(Number(x.valor_recebido||0))}</td>
+      <td class="n">${fmtBRL(Number(x.valor_com_nota||0))}</td>
+    </tr>`).join("")}
+    </tbody><tfoot><tr><th colspan="3">Total de ${linhas.length} pacientes</th>
+      <th class="n">${fmtBRL(tot)}</th><th></th></tr></tfoot></table></div>
+    <div class="row" style="margin-top:10px"><button class="btn" id="dmedCsv">Baixar (CSV)</button></div>`;
+  const c = $("#dmedCsv");
+  if(c) c.addEventListener("click", ()=>baixarCSV("dmed-"+ano,
+    [["Paciente","CPF","Nascimento","Valor recebido","Pagamentos","Valor com nota"]].concat(
+      linhas.map(x=>[x.paciente, x.cpf||"", x.nascimento||"",
+                     x.valor_recebido, x.qtd_pagamentos, x.valor_com_nota]))));
 }
 
 function formCobranca(pacId){
@@ -13874,6 +14263,8 @@ function formPagamento(pacId, cobId){
         <div class="field" id="pgNFNumBox" hidden><label for="pgNFNum">Número da nota</label>
           <input id="pgNFNum" class="mono" placeholder="opcional"></div>
       </div>
+      <div class="field" id="pgNFDataBox" hidden><label for="pgNFData">Data de emissão da nota</label>
+        <input id="pgNFData" type="date" value="${hojeISO()}" max="${hojeISO()}"></div>
       <div class="grid2">
         <div class="field"><label for="pgNsu">NSU / comprovante</label>
           <input id="pgNsu" class="mono" placeholder="opcional"></div>
@@ -13898,7 +14289,11 @@ function formPagamento(pacId, cobId){
     $("#pgCredito").hidden = !credito;
     $("#pgMaqBox").hidden = !naMaquina;
     const nf = $("#pgNF");
-    if(nf) $("#pgNFNumBox").hidden = nf.value !== "sim";
+    if(nf){
+      const temNF = nf.value === "sim";
+      $("#pgNFNumBox").hidden = !temNF;
+      if($("#pgNFDataBox")) $("#pgNFDataBox").hidden = !temNF;
+    }
     /* No celular o bloco do cartão nasce bem abaixo da dobra: sem trazer
        ele para a tela, o dentista escolhe "crédito" e conclui que não
        existe parcelamento. Foi exatamente o que aconteceu no teste. */
@@ -13957,6 +14352,8 @@ function formPagamento(pacId, cobId){
       maquininha: naMaquina && $("#pgMaq") ? ($("#pgMaq").value||null) : null,
       nf: $("#pgNF") ? $("#pgNF").value === "sim" : false,
       nfNum: $("#pgNFNum") ? ($("#pgNFNum").value.trim()||null) : null,
+      nfData: $("#pgNFData") && $("#pgNF") && $("#pgNF").value==="sim"
+              ? ($("#pgNFData").value||null) : null,
       nsu: $("#pgNsu").value.trim()||null,
       taxa: $("#pgTaxa") && $("#pgTaxa").value.trim()!=="" ? numBR($("#pgTaxa").value) : null,
       conta: $("#pgConta") ? ($("#pgConta").value||null) : null,
@@ -13974,7 +14371,8 @@ function formPagamento(pacId, cobId){
       S.pagamentos = S.pagamentos||[];
       S.pagamentos.push({id, cobranca_id:cobId, valor:v, forma_enum:forma,
         parcelas:d.parcelas, antecipado:d.antecipado, bandeira:d.bandeira,
-        maquininha_id:d.maquininha, nota_fiscal:d.nf, nota_numero:d.nfNum, nsu:d.nsu,
+        maquininha_id:d.maquininha, nota_fiscal:d.nf, nota_numero:d.nfNum,
+        nota_emitida_em:d.nfData, nsu:d.nsu,
         taxa:pr.taxa, taxa_pct:pr.taxa_pct, liquido:pr.liquido,
         pago_em:d.dia+"T12:00:00", observacao:d.obs});
       S.parcelas = S.parcelas||[];
@@ -15246,6 +15644,12 @@ window.MD = {
   get despAba(){ return despAba; }, set despAba(v){ despAba = v; },
   get despMes(){ return despMes; }, set despMes(v){ despMes = v; },
   fmtCel, fmtCpf, parcelasDoPlano, contasAtivas,
+  /* nota fiscal do paciente: o bloco que a recepção cola no Emissor
+     Nacional é TEXTO EXATO. Conferir isso pela tela é conferir o que a
+     tela mostra, não o que a pessoa vai colar — por isso a função que
+     monta o texto fica alcançável pelo teste. */
+  dadosNF, textoNF, faltasNF, abrirNF, fecharNF, renderNF, croDe, rotuloCro,
+  pagamentosSemNF, htmlNotas, ligarNotas, gerarDmed,
   get painel(){ return painel; }, set painel(v){ painel = v; },
   get finAba(){ return finAba; }, set finAba(v){ finAba = v; },
   get quitarAberto(){ return quitarAberto; }, set quitarAberto(v){ quitarAberto = v; },
