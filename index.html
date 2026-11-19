@@ -1680,7 +1680,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v67 · 19/11/2026";
+const VERSAO = "v68 · 19/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1749,7 +1749,7 @@ const DB = {
      essencial (valor, forma, paciente) nunca é acessório, então se o erro
      for em um desses a falha sobe como antes. */
   COLUNAS_OPCIONAIS: new Set(["maquininha_id","nota_fiscal","nota_numero",
-                              "nota_emitida_em",
+                              "nota_emitida_em","atualizado_em",
                               "bandeira","nsu","adquirente","observacao",
                               "conta_id","plano_descricao","pedido_id"]),
   async inserirTolerante(tabela, corpo, prefer){
@@ -9978,19 +9978,34 @@ const CFG = {
     cfg.clinica = cl[0] || null;
     cfg.salas = sl;
     cfg.equipe = eq;
-    // o e-mail vem de auth.users por função, uma chamada por pessoa;
-    // é pouca gente, e evita expor a tabela de autenticação inteira
-    if(pode("admin")){
-      const pares = await Promise.all(eq.map(async u=>{
+    /* O e-mail já vem na vw_equipe. A busca por função (uma chamada por
+       pessoa) virou SÓ O PLANO B, para quem ficou sem e-mail na visão:
+       a função email_do_usuario não existe neste banco, e o laço
+       disparava uma requisição por membro da equipe, todas falhando em
+       silêncio, a cada abertura das configurações. Agora só roda se
+       faltar e-mail de alguém — e, se a função não existir, a tela
+       mostra o que a visão trouxe em vez de nada. */
+    cfg.emails = Object.fromEntries(eq.map(u=>[u.id, u.email||null]));
+    const semEmail = eq.filter(u=>!u.email);
+    if(pode("admin") && semEmail.length){
+      const pares = await Promise.all(semEmail.map(async u=>{
         try{ return [u.id, await DB.rest("POST","rpc/email_do_usuario",{p_id:u.id})]; }
         catch(e){ return [u.id, null]; }
       }));
-      cfg.emails = Object.fromEntries(pares);
+      Object.assign(cfg.emails, Object.fromEntries(pares));
     }
   },
   async salvarClinica(d){
     if(MODO!=="nuvem"){ Object.assign(cfg.clinica, d); save(); return; }
-    await DB.rest("PATCH","clinicas?id=eq."+cfg.clinica.id, {...d, atualizado_em:new Date().toISOString()});
+    /* escreverTolerante, e não rest direto: clinicas não tinha
+       atualizado_em, e o PATCH inteiro era recusado por causa de um
+       carimbo de hora. O endereço, o CNPJ e o CRO não iam para o banco
+       por causa de uma coluna acessória — e a tela só dizia
+       "Could not find the 'atualizado_em' column". Agora a coluna
+       existe (ATUALIZAR-DADOS-DA-UNIDADE.sql) e, se o banco de alguém
+       ainda não tiver, o resto do cadastro grava do mesmo jeito. */
+    await DB.escreverTolerante("PATCH","clinicas?id=eq."+cfg.clinica.id,
+      {...d, atualizado_em:new Date().toISOString()});
   },
   async salvarSala(id, d){
     if(MODO!=="nuvem"){
