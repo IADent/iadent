@@ -1373,7 +1373,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <button role="tab" aria-selected="false" data-fin="producao">Produção</button>
         <button role="tab" aria-selected="false" data-fin="precos">Preços</button>
         <button role="tab" aria-selected="false" data-fin="taxas">Taxas da maquininha</button>
-        <button role="tab" aria-selected="false" data-fin="contas">Contas de recebimento</button>
+        <button role="tab" aria-selected="false" data-fin="contas">Contas da clínica</button>
       </div>
       <div id="finPainel"></div>
     </section>
@@ -1541,7 +1541,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
 const PERFIS = {
   Administrador:{rotulo:"Administrador", desc:"Acesso total e aprovação de usuários",
     telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
-    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, admin:true,
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, editaCadastro:true, admin:true,
     custo:true,
     parceiros:true, parceirosEdita:true,
     valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
@@ -1560,7 +1560,7 @@ const PERFIS = {
      simples, e o perfil novo entra logo abaixo. */
   Dentista:{rotulo:"Dentista", desc:"Atende, edita prontuário e agenda",
     telas:["hoje","pacientes","estoque","agenda","parceiros"],
-    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:false, cadastro:true, admin:false,
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:false, agenda:true, financeiro:false, cadastro:true, editaCadastro:true, admin:false,
     custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:false, projecao:false, relatorios:false,
@@ -1589,7 +1589,7 @@ const PERFIS = {
   DentistaProprietario:{rotulo:"Dentista-proprietário",
     desc:"Atende e administra a clínica — acesso total",
     telas:["hoje","pacientes","estoque","agenda","financeiro","parceiros"],
-    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, admin:true,
+    lancaMaterial:true, atender:true, prontuario:true, verClinico:true, estoque:true, agenda:true, financeiro:true, cadastro:true, editaCadastro:true, admin:true,
     custo:true,
     parceiros:true, parceirosEdita:true,
     valores:true, lancaLote:true, caixa:true, projecao:true, relatorios:true,
@@ -1604,7 +1604,7 @@ const PERFIS = {
        combina a sedação. Cadastro trancado no administrador envelhece
        parado. */
     telas:["pacientes","agenda","parceiros"],
-    atender:false, prontuario:false, verClinico:false, estoque:false, agenda:true, financeiro:false, cadastro:true, admin:false,
+    atender:false, prontuario:false, verClinico:false, estoque:false, agenda:true, financeiro:false, cadastro:true, editaCadastro:true, admin:false,
     custo:false,
     parceiros:true, parceirosEdita:true,
     valores:false, lancaLote:false, caixa:true, projecao:false, relatorios:false,
@@ -1620,12 +1620,18 @@ const PERFIS = {
        prontuário: verClinico e prontuario seguem false, então o que é
        clínico não abre para este perfil. */
     telas:["financeiro","pacientes","agenda","parceiros"],
-    atender:false, prontuario:false, verClinico:false, estoque:false, agenda:false, financeiro:true, cadastro:false, admin:false,
+    /* editaCadastro:true — pedido dela: "se eu já estiver com o paciente,
+       recebendo o pagamento, eu mesma já consigo atualizar os dados dele,
+       sem ter que pedir pra outra pessoa fazer". ALTERA a ficha; CRIAR
+       paciente continua sendo da secretária e do dentista (cadastro:false).
+       precos:false — "tirar o campo Preço": tabela de preço é decisão
+       clínica e comercial do dentista, não do caixa. */
+    atender:false, prontuario:false, verClinico:false, estoque:false, agenda:false, financeiro:true, cadastro:false, editaCadastro:true, admin:false,
     custo:true,
     parceiros:true, parceirosEdita:false,
     valores:true, lancaLote:false, caixa:true, projecao:true, relatorios:true,
     lancaPagamento:true, lancaCobranca:true, despesas:true, contas:true,
-    precos:true, precoTodos:true, soMinhas:false},
+    precos:false, precoTodos:true, soMinhas:false},
   /* O assistente trabalha ao lado do dentista, na cadeira: enxerga o
      prontuário para saber o que está sendo feito e lança o material
      gasto no procedimento. NÃO registra o atendimento nem anota
@@ -1634,7 +1640,7 @@ const PERFIS = {
   Assistente:{rotulo:"Assistente", desc:"Acompanha o atendimento e lança o material usado",
     telas:["hoje","pacientes","estoque"],
     atender:false, prontuario:false, verClinico:true, estoque:true, agenda:false,
-    financeiro:false, cadastro:false, admin:false,
+    financeiro:false, cadastro:false, editaCadastro:false, admin:false,
     parceiros:false, parceirosEdita:false,
     custo:false, valores:false, lancaLote:false, caixa:false, projecao:false, relatorios:false,
     lancaPagamento:false, lancaCobranca:false, despesas:false, contas:false,
@@ -1650,7 +1656,7 @@ const PERFIS = {
        que o cliente já tinha pedido; margem, preço de venda e taxa de
        maquininha continuam fora (valores:false). */
     telas:["estoque","parceiros"],
-    atender:false, prontuario:false, verClinico:false, estoque:true, agenda:false, financeiro:false, cadastro:false, admin:false,
+    atender:false, prontuario:false, verClinico:false, estoque:true, agenda:false, financeiro:false, cadastro:false, editaCadastro:false, admin:false,
     parceiros:true, parceirosEdita:false,
     /* custo SIM, valores NÃO: para lançar a nota fiscal é preciso ver
        quanto se pagou pelo material; preço de venda, margem de lucro e
@@ -1693,7 +1699,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v71 · 19/11/2026";
+const VERSAO = "v73 · 23/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1737,7 +1743,16 @@ const DB = {
   /* chamada ao PostgREST. Devolve o corpo já em objeto; em erro, lança
      Error com a mensagem do banco — é ela que diz se foi RLS, restrição
      ou dado inválido, e sem isso depurar vira adivinhação. */
-  async rest(metodo, caminho, corpo, prefer){
+  /* O TOKEN EXPIRA EM UMA HORA — E O APLICATIVO NÃO RENOVAVA.
+     Relato do financeiro: "não consigo lançar nenhum recebimento" e
+     "em cobrança não consigo registrar pagamento, fala que já está
+     expirado". Não era a cobrança que expirou: era a sessão. Quem abre
+     o sistema de manhã e vai lançar à tarde levava "JWT expired" em
+     TODA gravação, e só um F5 resolvia — sem ninguém dizer isso.
+     Agora: 401 renova o token uma vez e repete a chamada sozinho. Se a
+     renovação também falhar, a sessão acabou de verdade e a mensagem
+     diz isso em português, em vez de devolver o erro cru do banco. */
+  async rest(metodo, caminho, corpo, prefer, jaTentou){
     const h = {apikey:BACKEND.key, "Content-Type":"application/json"};
     if(DB.tok) h.Authorization = "Bearer "+DB.tok;
     if(prefer) h.Prefer = prefer;
@@ -1747,6 +1762,12 @@ const DB = {
     let dados=null; try{ dados = txt ? JSON.parse(txt) : null; }catch(e){ dados=txt; }
     if(!r.ok){
       const msg = (dados && (dados.message||dados.hint)) || ("HTTP "+r.status);
+      const expirou = r.status===401 || /jwt expired|JWSError|PGRST301/i.test(String(msg));
+      if(expirou && !jaTentou && DB.ref){
+        if(await DB.renovar()) return await DB.rest(metodo, caminho, corpo, prefer, true);
+        const e2 = new Error("Sua sessão acabou. Entre de novo para continuar.");
+        e2.status = 401; e2.sessaoMorta = true; throw e2;
+      }
       const err = new Error(msg); err.status=r.status; err.detalhe=dados; throw err;
     }
     return dados;
@@ -2044,7 +2065,17 @@ const DB = {
       cpf:(p.cpf||"").replace(/\D/g,"")||null, telefone:p.tel||null, email:p.email||null,
       observacao: (p.obsGeral||"").trim() || null};
     if(UID.pac[p.id]){
-      await DB.escreverTolerante("PATCH","pacientes?id=eq."+UID.pac[p.id], corpo);
+      /* return=representation e CONFERIR o retorno: quando a RLS recusa
+         um UPDATE, o PostgREST responde 200 com zero linhas — sem erro
+         nenhum. A tela dizia "salvo" e o banco não tinha mudado nada,
+         que é a pior falha possível num cadastro. Agora, zero linha
+         vira erro com o motivo provável. */
+      const volta = await DB.escreverTolerante("PATCH","pacientes?id=eq."+UID.pac[p.id],
+        corpo, "return=representation");
+      if(!Array.isArray(volta) || !volta.length)
+        throw new Error("o banco não aceitou a alteração desta ficha. "
+          + "Se o seu perfil é Financeiro, falta rodar ATUALIZAR-ACESSO-FINANCEIRO.sql; "
+          + "caso contrário, o seu perfil não altera cadastro de paciente.");
     }else{
       corpo.clinica_id = DB.clinica;
       const r = await DB.escreverTolerante("POST","pacientes", corpo, "return=representation");
@@ -2738,6 +2769,10 @@ async function naNuvem(fn, oqueFalhou){
       /* "banco" sozinho foi lido como BANCO (o do dinheiro) por quem usa:
          o dentista saiu procurando um campo de banco que não existe. */
       toast("Falta rodar a atualização do banco de dados — veja a instrução na tela do módulo.");
+      return false;
+    }
+    if(e && e.sessaoMorta){
+      toast("Sua sessão acabou — entre de novo e lance outra vez. Nada foi gravado.");
       return false;
     }
     toast("Não salvou no banco de dados ("+oqueFalhou+"): "+e.message);
@@ -7299,7 +7334,11 @@ function abrirPaciente(id){
   carregarFichaClinica(id);
   const p=pacById(id);
   const hist=S.atendimentos.filter(a=>a.pac===id).sort((a,b)=>a.data<b.data?1:-1);
-  const clinico=pode("verClinico"), editaPront=pode("prontuario"), editaCad=pode("cadastro");
+  /* editaCadastro, não cadastro: ALTERAR a ficha e CRIAR paciente
+     deixaram de ser a mesma permissão. O financeiro recebe o pagamento
+     com o paciente na frente e precisa corrigir um telefone ali mesmo;
+     criar paciente continua com a secretária e o dentista. */
+  const clinico=pode("verClinico"), editaPront=pode("prontuario"), editaCad=pode("editaCadastro");
   const vazio='<span style="color:var(--ink-3)">não informado</span>';
   const pend=["nasc","sexo","cpf","tel","email"].filter(k=>!p[k]).length;
   /* A lista de pacientes SAI quando a ficha abre, em qualquer largura.
@@ -8398,12 +8437,16 @@ let pedItens = null;          // rascunho das linhas
 let pedVer   = null;          // id do pedido com as linhas abertas
 let pedFiltro = "abertos";    // "abertos" | "todos" | "atrasados"
 
+/* Rótulos reescritos: "À vista, no pedido" foi lido como alguma outra
+   coisa por quem usa ("o que seria Pedido no recorde?"). Cada opção
+   agora diz QUANDO se paga, em palavras inteiras — é isso que decide a
+   data de vencimento da despesa. */
 const COND_PEDIDO = [
-  ["a_vista",          "À vista, no pedido"],
-  ["na_entrega",       "Na entrega"],
-  ["dias_apos_entrega","Dias após a entrega"],
-  ["dias_apos_pedido", "Dias após o pedido"],
-  ["data_fixa",        "Data combinada"]
+  ["a_vista",          "À vista — pago na hora de fazer o pedido"],
+  ["na_entrega",       "No dia da entrega"],
+  ["dias_apos_entrega","Alguns dias depois da entrega"],
+  ["dias_apos_pedido", "Alguns dias depois do pedido"],
+  ["data_fixa",        "Numa data combinada"]
 ];
 const TIPO_PEDIDO = [
   ["material",    "Material"],
@@ -8629,7 +8672,7 @@ function htmlPedidoForm(f){
     + '<input id="pdPrev" type="date" value="'+(f.entrega_prevista||"")+'"></div></div>'
 
     + '<div class="grid2">'
-    + '<div class="field"><label for="pdCond">Pagamento combinado</label><select id="pdCond">'
+    + '<div class="field"><label for="pdCond">Quando este pedido é pago</label><select id="pdCond">'
     + COND_PEDIDO.map(([v,r])=>'<option value="'+v+'"'
         +((f.condicao||"dias_apos_entrega")===v?" selected":"")+'>'+r+'</option>').join("")
     + '</select></div>'
@@ -8846,7 +8889,9 @@ function renderParceiros(){
         <label for="parcFiltro">Procurar</label>
         <input id="parcFiltro" type="search" autocomplete="off"
           value="${(parcBusca||"").replace(/"/g,"&quot;")}" placeholder="nome, tipo ou contato"></div>
-      ${edita?`<button class="btn primary" id="parcNovo">+ Novo parceiro</button>`:""}
+      ${edita?`<button class="btn primary" id="parcNovo">+ Novo parceiro</button>`
+             :`<span class="hint">Seu perfil vê e paga parceiros, mas não cadastra
+               — peça ao administrador para incluir o fornecedor novo.</span>`}
     </div>
 
     <div class="card" id="parcCard" ${parcForm?"":"hidden"}>${parcForm?formParceiroHtml(parcForm):""}</div>
@@ -9340,7 +9385,12 @@ const AG = {
     return await DB.rest("GET","salas?select=id,nome,ordem&ativa=is.true&order=ordem");
   },
   async dentistas(){
-    return (S.usuarios||[]).filter(atendePaciente);
+    /* temTabelaPropria, e NÃO atendePaciente: atendePaciente inclui o
+       administrador (ele pode atender se quiser), e por isso o nome do
+       Luiz aparecia na lista de dentistas da agenda, da despesa e da
+       conta bancária. Quem é dentista na clínica é quem tem cadeira e
+       tabela própria. */
+    return (S.usuarios||[]).filter(temTabelaPropria);
   },
   /* leitura por período, em vez de por mês: é o que a semana da lateral
      precisa, e é o mesmo endpoint — só muda a janela */
@@ -11354,10 +11404,19 @@ function htmlDespForm(d){
     + FORMAS.filter(([v])=>v!=="cortesia"&&v!=="plano_saude")
         .map(([v,r])=>'<option value="'+v+'"'+(d.forma===v?" selected":"")+'>'+r+'</option>').join("")
     + '</select></div>'
+    /* "ao lançar uma despesa, não permite colocar de qual conta saiu o
+       dinheiro (PJ ou PF)" — o campo existia; o que não existia era
+       CONTA CADASTRADA, e um seletor com uma opção só ("não informado")
+       parece campo quebrado. Agora ele diz onde se cadastra. */
     + '<div class="field"><label for="dsConta">De qual conta saiu</label><select id="dsConta">'
     + '<option value="">— não informado —</option>'
     + contasAtivas().map(ct=>'<option value="'+ct.id+'"'+(d.conta_id===ct.id?" selected":"")+'>'
-        + esc(ct.apelido)+'</option>').join("") + '</select></div></div>'
+        + esc(ct.apelido)+'</option>').join("") + '</select>'
+    + (contasAtivas().length ? ''
+        : '<div class="hint" style="margin-top:5px">Nenhuma conta cadastrada ainda — '
+        + 'cadastre em <b>Financeiro → Contas da clínica</b> (PJ e PF). '
+        + 'Depois ela aparece aqui.</div>')
+    + '</div></div>'
     + '<div class="field"><label for="dsForn">Fornecedor ou prestador</label>'
     + '<input id="dsForn" value="'+esc(d.fornecedor||"")+'" '
     + 'placeholder="quem recebeu — opcional"></div>'
@@ -11368,7 +11427,7 @@ function htmlDespForm(d){
         + esc(x.nome)+'</option>').join("") + '</select></div>'
     + '<div class="field"><label for="dsDent">Dentista — se é rateada para um só</label>'
     + '<select id="dsDent"><option value="">— da clínica —</option>'
-    + (S.usuarios||[]).filter(atendePaciente)
+    + (S.usuarios||[]).filter(temTabelaPropria)
         .map(u=>'<option value="'+u.id+'"'+(d.dentista_id===u.id?" selected":"")+'>'
           + esc(u.nome)+'</option>').join("") + '</select></div></div>'
     + '<div class="grid2">'
@@ -11806,6 +11865,43 @@ function linhasPainel(){
   });
 }
 
+/* "No painel não está refletindo o valor de R$ 5.000 que você lançou."
+   O painel estava certo e a conta também: aqueles R$ 5.000 foram pagos
+   em 10x no crédito, e a base padrão é PREVISÃO DE CRÉDITO — então no
+   recorte só aparecem as parcelas que caem nele. R$ 500 na tela, R$ 4.500
+   adiante. Painel certo, pergunta legítima, tela calada.
+   Esta função acha o que ficou DE FORA: parcelas de pagamentos que
+   foram lançados dentro do período mas caem depois dele. */
+function foraDaJanela(){
+  if(!painel || painel.base !== "previsao") return null;
+  const dentro = linhasPainel();
+  if(!dentro.length) return null;
+  /* A primeira versão só avisava quando o PAGAMENTO tinha sido lançado
+     dentro do recorte. Não cobria o caso real: os R$ 5.000 foram pagos
+     em 19/10, em 10x, e as parcelas caem de 18/11 a 15/08/2027 — com o
+     painel em novembro, o pagamento ficou ANTES da janela e o aviso não
+     disparava. A tela mostrava R$ 500 por mês, calada sobre os outros
+     R$ 4.500. Agora a pergunta é outra e é a certa: deste pagamento que
+     JÁ aparece aqui, quanto ficou para depois? */
+  const pagsNaJanela = new Set(dentro.map(x=>x.pagamento_id).filter(Boolean));
+  const idsDentro    = new Set(dentro.map(x=>x.parcela_id));
+  if(!pagsNaJanela.size) return null;
+  let valor = 0, ate = "", parcelas = 0;
+  (S.analitico||[]).forEach(x=>{
+    if(!pagsNaJanela.has(x.pagamento_id)) return;
+    if(idsDentro.has(x.parcela_id)) return;
+    if(painel.dent  && x.dentista_id !== painel.dent) return;
+    if(painel.sala  && String(x.sala_id||"") !== painel.sala) return;
+    if(painel.forma && x.forma !== painel.forma) return;
+    if(painel.conta && String(x.conta||"") !== painel.conta) return;
+    valor += Number(x.valor_liquido||0);
+    parcelas++;
+    const p = String(x.previsao_credito||"").slice(0,10);
+    if(p > ate) ate = p;
+  });
+  return valor > 0.005 ? {valor:cent(valor), ate, parcelas} : null;
+}
+
 function somaPainel(linhas){
   const s = {bruto:0, taxas:0, liquido:0, recebido:0, areceber:0, atrasado:0,
              parcelas:linhas.length, pacientes:new Set(), cobrancas:new Set()};
@@ -12018,6 +12114,15 @@ function htmlPainel(){
     + s.parcelas+' parcela(s) · '+s.cobrancas+' cobrança(s) · '+s.pacientes+' paciente(s)'
     + (s.bruto ? ' · taxa média '+(s.taxas/s.bruto*100).toFixed(2)+'%' : "")
     + '</div>'
+    + (()=>{ const f = foraDaJanela(); return f
+        ? '<div class="aviso" style="margin-top:8px">Dos pagamentos que aparecem acima, '
+          + 'mais <b>'+fmtBRL(f.valor)+'</b> em '+f.parcelas+' parcela(s) de cartão '
+          + '<b>cai depois de '+fmtData(painel.ate)+'</b>'
+          + (f.ate ? ', a última em '+fmtData(f.ate) : "")
+          + ' — por isso o total aqui é menor que o valor cobrado. Para ver o valor '
+          + 'cheio no dia em que a venda foi feita, mude a <b>Base da data</b> para '
+          + '“Data do pagamento — faturamento”; para ver tudo, clique em <b>Tudo</b>.</div>'
+        : ""; })()
     + '<div class="rowbtns" style="margin-top:8px">'
     + '<button class="minibtn" id="pnCsv">Baixar CSV do recorte</button>'
     + '<button class="minibtn" id="pnImp">Imprimir</button></div>'
@@ -12105,8 +12210,11 @@ function htmlContas(){
   }
   const lista = (S.contasFull||[]).filter(c=>!(contaEdit && c.id===contaEdit.id));
   const c = contaEdit;
-  return '<div class="sec-h"><h2>Contas de recebimento</h2>'
-    + '<span class="hint">na confirmação do pagamento aparece só o apelido</span></div>'
+  /* chamava-se "de recebimento", mas é a mesma lista que a despesa usa
+     para dizer de onde o dinheiro SAIU. Nome pela metade mandava quem
+     procurava conta de saída procurar noutro lugar. */
+  return '<div class="sec-h"><h2>Contas da clínica</h2>'
+    + '<span class="hint">entrada e saída · na tela aparece só o apelido</span></div>'
     + '<div class="stage">O apelido é o que a equipe vê. Banco, agência, conta e chave PIX '
     + 'ficam aqui, e só aparecem para administrador, financeiro e para o dentista dono '
     + 'da própria conta.</div>'
@@ -12126,7 +12234,7 @@ function htmlContas(){
       + '</select></div>'
       + '<div class="field"><label for="ctDono">Dentista dono (conta PF)</label><select id="ctDono">'
       + '<option value="">— da clínica —</option>'
-      + (S.usuarios||[]).filter(atendePaciente)
+      + (S.usuarios||[]).filter(temTabelaPropria)
           .map(u=>'<option value="'+u.id+'"'+(c.dono_id===u.id?" selected":"")+'>'
             + esc(u.nome)+'</option>').join("")
       + '</select></div></div>'
@@ -15728,6 +15836,9 @@ window.MD = {
   dadosNF, textoNF, faltasNF, abrirNF, fecharNF, renderNF, croDe, rotuloCro,
   pagamentosSemNF, htmlNotas, ligarNotas, gerarDmed,
   get painel(){ return painel; }, set painel(v){ painel = v; },
+  /* o painel é conta, não desenho: o teste precisa somar o recorte e
+     perguntar o que ficou de fora, em vez de ler número de tela */
+  linhasPainel, somaPainel, foraDaJanela, painelInicial,
   get finAba(){ return finAba; }, set finAba(v){ finAba = v; },
   get quitarAberto(){ return quitarAberto; }, set quitarAberto(v){ quitarAberto = v; },
   get planoAberto(){ return planoAberto; }, set planoAberto(v){ planoAberto = v; },
