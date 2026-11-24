@@ -1746,7 +1746,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v78 · 24/11/2026";
+const VERSAO = "v79 · 24/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -9636,6 +9636,37 @@ const eventosDoDia = iso => agenda.eventos
   .filter(e => !agenda.dentista || e.dentista_id === agenda.dentista)
   .sort((a,b)=> a.inicio < b.inicio ? -1 : 1);
 
+/* QUANTOS COMPROMISSOS O FILTRO ESTÁ ESCONDENDO NESTE DIA.
+   A semana da lateral mostra TUDO; o dia aplica sala e dentista. Com um
+   filtro ligado, a lateral dizia "4 pacientes às 11h, 15h, 16h30 e
+   17h30" e o dia da mesma data dizia "0 ocupado(s), tudo livre" — duas
+   telas do mesmo dia se contradizendo, e nada escrito dizendo que havia
+   filtro. Foi exatamente o que o Luiz relatou. */
+function escondidosNoDia(iso){
+  const todos = (agenda.eventos||[]).filter(e => diaISO(new Date(e.inicio)) === iso
+    && OCUPA.includes(e.status));
+  return todos.length - eventosDoDia(iso).filter(e=>OCUPA.includes(e.status)).length;
+}
+function filtroDaAgendaLigado(){
+  const salas = (agenda.salas||[]).length;
+  const porSala = !!agenda.sala && salas > 1;        // com uma sala só, não é filtro
+  return porSala || !!agenda.dentista;
+}
+function rotuloFiltroAgenda(){
+  const p = [];
+  if(agenda.dentista){
+    const d = (agenda.dentistas||[]).find(x=>x.id===agenda.dentista);
+    /* filtro apontando para alguém que saiu da lista é justamente o
+       caso que mais confunde: nomear "—" não ajuda ninguém */
+    p.push(d && d.nome ? "dentista: "+d.nome : "um dentista que não está mais na lista");
+  }
+  if(agenda.sala && (agenda.salas||[]).length > 1){
+    const s = (agenda.salas||[]).find(x=>x.id===agenda.sala);
+    p.push(s && s.nome ? "sala: "+s.nome : "uma sala que não está mais na lista");
+  }
+  return p.join(" · ") || "sala ou dentista";
+}
+
 /* o que acontece neste slot: devolve o evento que o ocupa, se houver */
 function noSlot(lista, iso, minuto){
   const ini = new Date(iso+"T00:00:00"); ini.setMinutes(minuto);
@@ -9782,8 +9813,17 @@ function renderDia(){
   box.innerHTML = `
     <div class="sec-h" style="margin-top:14px">
       <h2>${dt.toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</h2>
-      <span class="hint">${evs.filter(e=>OCUPA.includes(e.status)).length} ocupado(s) · ${(agenda.salas.find(s=>s.id===agenda.sala)||{}).nome||""}</span>
+      <span class="hint">${evs.filter(e=>OCUPA.includes(e.status)).length} ocupado(s)${
+        filtroDaAgendaLigado() ? " <b>no filtro atual</b>" : ""} · ${
+        (agenda.salas.find(s=>s.id===agenda.sala)||{}).nome||""}</span>
     </div>
+    ${(()=>{ const n = escondidosNoDia(iso);
+       if(!n) return "";
+       return `<div class="aviso" style="margin-bottom:8px">
+         <b>${n} compromisso(s) deste dia não aparecem abaixo</b> — há filtro ligado
+         (${esc(rotuloFiltroAgenda())}). É por isso que a agenda da lateral mostra mais
+         do que esta tela. <button class="minibtn" id="limparFiltroAg"
+         style="margin-left:6px">Mostrar todos</button></div>`; })()}
     ${podeMexer?`<div class="row" style="margin-bottom:8px">
       <button class="btn" id="novoBloqueio">Bloquear horário</button>
       <button class="btn primary" id="novoAgend">Agendar paciente</button>
@@ -9791,6 +9831,12 @@ function renderDia(){
     <div id="agForm"></div>
     <div class="dia-grade">${linhas}</div>`;
 
+  const lf = $("#limparFiltroAg");
+  if(lf) lf.addEventListener("click", ()=>{
+    agenda.dentista = "";
+    if((agenda.salas||[]).length > 1) agenda.sala = agenda.salas[0].id;
+    renderAgenda();
+  });
   if(podeMexer){
     $("#novoBloqueio").addEventListener("click", ()=>abrirForm("bloqueio"));
     $("#novoAgend").addEventListener("click", ()=>abrirForm("agendamento"));
@@ -15964,6 +16010,7 @@ window.MD = {
      relógio, e a única forma honesta de verificar que ele pinta é
      colocar um agendamento no passado e olhar a cor que saiu */
   agenda(){ return agenda; }, renderAgenda, atrasado,
+  eventosDoDia, escondidosNoDia, filtroDaAgendaLigado, rotuloFiltroAgenda,
   /* a semana da lateral: o teste precisa alcançá-la para conferir que
      ela rola DENTRO da barra em vez de empurrar o rodapé para fora */
   renderMiniAgenda, carregarSemana, addDias, rotuloDiaSemana,
