@@ -1720,7 +1720,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v74 · 24/11/2026";
+const VERSAO = "v75 · 24/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -8460,6 +8460,13 @@ let pedForm  = null;          // pedido em edição
 let pedItens = null;          // rascunho das linhas
 let pedVer   = null;          // id do pedido com as linhas abertas
 let pedFiltro = "abertos";    // "abertos" | "todos" | "atrasados"
+/* Vindo do cartão do parceiro: mostra só os pedidos dele. Nasceu de um
+   relato real — "não consegui editar o valor do pedido em parceiros,
+   onde editar?". O botão "Editar" do cartão abre o CADASTRO do parceiro;
+   o valor mora no ITEM do pedido, em outra aba. Quem clica em Editar
+   esperando mudar o valor não está confuso: a tela é que não levava
+   para lá. */
+let pedParceiro = null;       // id do parceiro, ou null para todos
 
 /* Rótulos reescritos: "À vista, no pedido" foi lido como alguma outra
    coisa por quem usa ("o que seria Pedido no recorde?"). Cada opção
@@ -8512,7 +8519,8 @@ function vencimentoPrevisto(d){
 }
 
 function pedidosFiltrados(){
-  const p = pedidos();
+  let p = pedidos();
+  if(pedParceiro) p = p.filter(x=>x.parceiro_id === pedParceiro);
   if(pedFiltro === "todos") return p;
   if(pedFiltro === "atrasados")
     return p.filter(x=>x.entrega_atrasada || x.pagamento_vencido);
@@ -8541,7 +8549,11 @@ function htmlPedidosParceiro(){
     + '<select id="pdFiltro" style="max-width:200px">'
     + [["abertos","Em aberto"],["atrasados","Com atraso"],["todos","Todos"]]
         .map(([v,r])=>'<option value="'+v+'"'+(pedFiltro===v?" selected":"")+'>'+r+'</option>').join("")
-    + '</select></div>'
+    + '</select>'
+    + (pedParceiro ? '<button class="minibtn" id="pdLimparParc">'
+        + esc(((S.parceiros||[]).find(x=>x.id===pedParceiro)||{}).nome || "parceiro")
+        + ' ✕</button>' : "")
+    + '</div>'
 
     + (pedForm ? htmlPedidoForm(pedForm) : "")
 
@@ -8661,7 +8673,7 @@ function htmlPedidoForm(f){
     + 'value="'+esc(f.descricao||"")+'"></div>'
 
     + '<div class="sec-h" style="margin-top:4px"><h2>Itens</h2>'
-    + '<span class="hint">quantidade × valor unitário</span></div>'
+    + '<span class="hint">é aqui que se muda o valor do pedido</span></div>'
     + '<div class="rolar"><table class="tab-rel"><thead><tr>'
     + '<th>Descrição</th><th class="n">Qtd</th><th>Un.</th><th class="n">Unitário</th>'
     + '<th class="n">Total</th><th></th></tr></thead><tbody>'
@@ -8772,6 +8784,9 @@ function ligarPedidos(){
   });
   const cc=$("#pdCancelar");
   if(cc) cc.addEventListener("click", ()=>{ pedForm=null; pedItens=null; renderParceiros(); });
+
+  const lp = $("#pdLimparParc");
+  if(lp) lp.addEventListener("click", ()=>{ pedParceiro = null; renderParceiros(); });
 
   $$("#parcBox [data-pdver]").forEach(b=>b.addEventListener("click", ()=>{
     pedVer = pedVer === b.dataset.pdver ? null : b.dataset.pdver; renderParceiros(); }));
@@ -8945,7 +8960,9 @@ function htmlAbasParceiro(verPedidos){
 }
 function ligarAbasParceiro(){
   $$("#parcBox [data-parcaba]").forEach(b=>b.addEventListener("click", ()=>{
-    parcAba = b.dataset.parcaba; pedForm=null; pedItens=null; renderParceiros();
+    parcAba = b.dataset.parcaba; pedForm=null; pedItens=null;
+    pedParceiro = null;           // aba clicada à mão mostra tudo
+    renderParceiros();
   }));
 }
 
@@ -8980,7 +8997,9 @@ function cartaoParceiro(p, edita){
         ${zap?`<a class="minibtn" href="https://wa.me/55${zap}" target="_blank" rel="noopener">WhatsApp</a>`:""}
         ${tel?`<a class="minibtn" href="tel:+55${tel}">Ligar</a>`:""}
         ${p.email?`<a class="minibtn" href="mailto:${p.email}">E-mail</a>`:""}
-        ${edita?`<button class="minibtn" data-parced="${p.id}">Editar</button>`:""}
+        ${pode("valores")&&Number((resumoParceiro(p.id)||{}).pedidos||0)
+          ? `<button class="minibtn" data-parcped="${p.id}">Ver pedidos</button>`:""}
+        ${edita?`<button class="minibtn" data-parced="${p.id}">Editar cadastro</button>`:""}
       </div>
     </div></div>`;
 }
@@ -9047,6 +9066,17 @@ function ligarParceiros(){
   });
   const nv = $("#parcNovo");
   if(nv) nv.addEventListener("click", ()=>{ parcForm = {}; renderParceiros(); });
+  /* "Ver pedidos" vive no cartão do PARCEIRO, então o ouvinte tem de
+     estar aqui: posto em ligarPedidos() ele nunca era ligado, porque
+     aquela função só roda na outra aba. O botão aparecia e não fazia
+     nada — pior do que não existir. */
+  $$("#parcBox [data-parcped]").forEach(b=>b.addEventListener("click", ()=>{
+    pedParceiro = b.dataset.parcped;
+    pedFiltro = "todos";          // veio ver OS pedidos dele, não só os abertos
+    parcAba = "pedidos"; pedForm = null; pedItens = null;
+    renderParceiros();
+  }));
+
   $$("#parcBox [data-parced]").forEach(b=>b.addEventListener("click", ()=>{
     parcForm = {id:b.dataset.parced}; renderParceiros();
     const c = $("#parcCard"); if(c) c.scrollIntoView({behavior:"smooth", block:"center"});
@@ -15853,6 +15883,7 @@ window.MD = {
   get parcAba(){ return parcAba; }, set parcAba(v){ parcAba = v; },
   get pedFiltro(){ return pedFiltro; }, set pedFiltro(v){ pedFiltro = v; },
   get pedForm(){ return pedForm; }, set pedForm(v){ pedForm = v; },
+  get pedParceiro(){ return pedParceiro; }, set pedParceiro(v){ pedParceiro = v; },
   get pedItens(){ return pedItens; }, set pedItens(v){ pedItens = v; },
   despesasPainel, somaDespesas, fluxoMesPor, despesasFiltradas,
   get despAba(){ return despAba; }, set despAba(v){ despAba = v; },
