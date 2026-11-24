@@ -123,7 +123,21 @@
 body{margin:0;background:var(--shell);color:var(--ink);
   font-family:var(--f-body);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;cursor:pointer;background:none;border:none}
-input,select,textarea{font:inherit;color:inherit}
+/* TODO CAMPO DE DIGITAR NASCE COM A COR DO TEMA.
+   Esta regra só dizia font e color. Um <input> fora de .field ficava
+   então com o BRANCO padrão do navegador no fundo, e herdava a cor
+   CLARA do texto: no tema escuro era texto quase branco sobre branco.
+   Medido antes da correção: razão de contraste 1,85:1 — o mínimo
+   legível é 4,5:1. E caía justamente nos itens do pedido, que é onde
+   se digita o valor, e nas linhas do plano de pagamento.
+   Especificidade de propósito baixa (0,0,1): .searchbox, .field input
+   e input.travado continuam mandando nos seus próprios estilos. */
+input,select,textarea{font:inherit;color:var(--ink);background:var(--surface-2);
+  border:1px solid var(--line);border-radius:var(--r-sm)}
+/* caixa de marcar e botão de opção continuam nativos */
+input[type=checkbox],input[type=radio]{background:none;border:none;border-radius:0}
+/* campo dentro de tabela: respiro, senão fica grudado na borda */
+.tab-rel input{padding:7px 8px}
 h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:-.016em;font-weight:700}
 a{color:var(--accent)}
 :focus-visible{outline:2px solid var(--accent-2);outline-offset:2px;border-radius:4px}
@@ -1732,7 +1746,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v76 · 24/11/2026";
+const VERSAO = "v77 · 24/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
