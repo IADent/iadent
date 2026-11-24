@@ -1323,6 +1323,11 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <button class="btn" id="novoPacBtn">+ Novo paciente</button>
         <button class="btn primary" id="novaConsultaBtn">+ Nova consulta</button>
       </div>
+      <!-- "incluir número total de paciente cadastrado": a lista mostrava
+           nomes e nenhum número, e quem cuida do caixa precisa saber o
+           tamanho da base. Quando há busca, mostra os dois: quantos
+           apareceram e de quantos. -->
+      <div class="hint" id="pacContagem" style="margin:2px 2px 8px"></div>
       <div class="list" id="pacList2"></div>
       <div id="pacDetail" hidden></div>
     </section>
@@ -1647,7 +1652,14 @@ const PERFIS = {
        paciente continua sendo da secretária e do dentista (cadastro:false).
        precos:false — "tirar o campo Preço": tabela de preço é decisão
        clínica e comercial do dentista, não do caixa. */
-    atender:false, prontuario:false, verClinico:false, estoque:false, agenda:false, financeiro:true, cadastro:false, editaCadastro:true, admin:false,
+    /* agenda:true — pedido dela, duas vezes: "lembra que pedi pra
+       liberar no meu perfil a edição da agenda? Fui marcar um paciente
+       agora e não consegui". O rótulo do perfil já dizia "Faturamento,
+       recebimento e agenda"; só a chave estava em false, e a RLS do
+       banco também recusava. Marcar e remarcar consulta é trabalho de
+       recepção, e ela faz recepção quando recebe o paciente.
+       O que NÃO vem junto: prontuário e o que é clínico seguem fechados. */
+    atender:false, prontuario:false, verClinico:false, estoque:false, agenda:true, financeiro:true, cadastro:false, editaCadastro:true, admin:false,
     custo:true,
     parceiros:true, parceirosEdita:false,
     valores:true, lancaLote:false, caixa:true, projecao:true, relatorios:true,
@@ -1720,7 +1732,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v75 · 24/11/2026";
+const VERSAO = "v76 · 24/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -7291,6 +7303,14 @@ function renderListaPacientes(){
     return {ok: hits.length>0, hits};
   };
   const arr = S.pacientes.map(p=>({p, m:casa(p)})).filter(x=>x.m.ok);
+  const cont = $("#pacContagem");
+  if(cont){
+    const total = S.pacientes.length;
+    const plural = n => n===1 ? "1 paciente" : n+" pacientes";
+    cont.textContent = q
+      ? plural(arr.length)+" de "+total+" cadastrado"+(total===1?"":"s")
+      : plural(total)+" cadastrado"+(total===1?"":"s");
+  }
   if(!arr.length){
     list.innerHTML = '<div class="empty">'+(pacPor==="proc"
       ? "Nenhum paciente com esse procedimento no histórico."
