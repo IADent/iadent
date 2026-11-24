@@ -1746,7 +1746,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v79 · 24/11/2026";
+const VERSAO = "v80 · 24/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2358,7 +2358,8 @@ const DB = {
         DB.rest("GET","vw_despesas?select=id,descricao,fornecedor,valor,competencia,"+
           "vencimento,pago_em,paga,atrasada,forma,conta_id,conta,categoria_id,categoria,"+
           "tipo,grupo,parceiro_id,parceiro,dentista_id,dentista,sala_id,sala,fixa_id,"+
-          "recorrente,nota_fiscal,nota_numero,observacao&order=competencia.desc,vencimento"),
+          "recorrente,nota_fiscal,nota_numero,observacao,parcela_num,parcela_de,parcela_grupo"+
+          "&order=competencia.desc,vencimento"),
         DB.rest("GET","categorias_despesa?select=id,nome,tipo,grupo,ativa,ordem&order=ordem,nome"),
         DB.rest("GET","despesas_fixas?select=id,categoria_id,descricao,fornecedor,parceiro_id,"+
           "valor_previsto,dia_vencimento,sala_id,dentista_id,inicio,fim,ativa,observacao"+
@@ -11502,6 +11503,8 @@ function htmlDespTabela(lista){
           + (x.fornecedor||x.parceiro ? '<br><small style="color:var(--ink-3)">'
               + esc(x.parceiro||x.fornecedor)+'</small>' : "")
           + (x.recorrente ? ' <span class="pill neutral">fixa do mês</span>' : "")
+          + (x.parcela_de>1 ? ' <span class="pill neutral">'+x.parcela_num+'/'
+              + x.parcela_de+'</span>' : "")
           + '</td>'
           + '<td>'+esc(x.categoria)+'<br><small style="color:var(--ink-3)">'
           + (x.tipo==="fixa"?"fixa":"variável")+'</small></td>'
@@ -11517,6 +11520,64 @@ function htmlDespTabela(lista){
           + '</tr>').join("")
       + '</tbody></table></div>';
   }).join("");
+}
+
+/* ---------- parcelamento da despesa ----------
+   UMA LINHA POR PARCELA. Nada de uma despesa "mágica" que o fluxo de caixa
+   precisaria aprender a dividir: cada parcela tem vencimento, pago_em e conta
+   próprios, e as telas que já existem funcionam sem saber que existe parcela.
+   parcela_grupo amarra a série.
+
+   Duas competências possíveis, e a diferença é real:
+     · dividida mês a mês (padrão) — o custo acompanha o pagamento. É o que a
+       Thais descreveu e o que deixa o relatório mensal estável.
+     · tudo no mês da compra — competência contábil pura: comprou em novembro,
+       o custo é de novembro, ainda que o dinheiro saia até agosto.
+   O vencimento anda de mês em mês nos dois casos: é ele que o cartão cobra. */
+function maisMeses(iso, k){
+  if(!iso) return null;
+  const [a,m,d] = iso.split("-").map(Number);
+  const alvo = new Date(Date.UTC(a, (m-1)+k, 1));
+  const ultimo = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth()+1, 0)).getUTCDate();
+  alvo.setUTCDate(Math.min(d||1, ultimo));     // 31/01 + 1 mês = 28/02, não 03/03
+  return alvo.toISOString().slice(0,10);
+}
+function serieParcelada(base, n, compMensal){
+  const grupo = (crypto.randomUUID ? crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c=>{
+        const r=Math.random()*16|0; return (c==="x"?r:(r&3|8)).toString(16); }));
+  const total = cent(base.valor);
+  const cada  = cent(Math.floor(total*100/n)/100);
+  const resto = cent(total - cada*n);           // sobra de centavos na 1ª
+  return Array.from({length:n}, (_,i)=>({
+    ...base,
+    descricao: base.descricao+" ("+(i+1)+"/"+n+")",
+    valor: cent(cada + (i===0 ? resto : 0)),
+    competencia: compMensal ? maisMeses(base.competencia, i) : base.competencia,
+    vencimento: maisMeses(base.vencimento, i),
+    /* só a 1ª pode já estar paga; as outras ainda vão vencer */
+    pago_em: i===0 ? base.pago_em : null,
+    parcela_num: i+1, parcela_de: n, parcela_grupo: grupo
+  }));
+}
+function previaParcelas(){
+  const cx = $("#dsParcPrev"); if(!cx) return;
+  const n = Number(($("#dsParcelas")||{}).value||1);
+  if(n<2){ cx.hidden = true; return; }
+  const valor = numBR($("#dsValor").value);
+  const comp = ($("#dsComp").value||mesAtualISO().slice(0,7))+"-01";
+  const mensal = (($("#dsParcComp")||{}).value||"mes")==="mes";
+  const venc = $("#dsVenc").value||null;
+  const cada = valor>0 ? cent(Math.floor(cent(valor)*100/n)/100) : 0;
+  cx.hidden = false;
+  cx.innerHTML = "Vai lançar <b>"+n+" despesas</b>"
+    + (valor>0 ? " de "+fmtBRL(cada)+" cada (total "+fmtBRL(cent(valor))+")" : "")
+    + ", de <b>"+nomeMes(mensal ? comp : comp)+"</b> a <b>"
+    + nomeMes(mensal ? maisMeses(comp, n-1) : comp)+"</b>"
+    + (venc ? ", vencendo de "+fmtData(venc)+" a "+fmtData(maisMeses(venc, n-1)) : "")
+    + ". Cada uma entra no fluxo de caixa do seu mês e pode ser paga separada."
+    + (mensal ? "" : " A competência fica toda no mês da compra;"
+        + " só o vencimento anda.");
 }
 
 function htmlDespForm(d){
@@ -11560,6 +11621,27 @@ function htmlDespForm(d){
         + 'cadastre em <b>Financeiro → Contas da clínica</b> (PJ e PF). '
         + 'Depois ela aparece aqui.</div>')
     + '</div></div>'
+    /* DESPESA PARCELADA — pedido da Thais: "compra de material, 30 implantes
+       parcelados em 10x ... o ideal é que tenha um campo para incluir em quantas
+       parcelas foram feitas, assim ele já pode contabilizar essa despesa para os
+       meses seguintes". Uma linha por parcela: é assim que o fluxo de caixa, o
+       relatório por competência e o "a pagar" funcionam sem exceção nenhuma.
+       Só aparece ao LANÇAR. Editando, se edita a parcela aberta. */
+    + (nova ? '<div class="grid2">'
+        + '<div class="field"><label for="dsParcelas">Parcelas</label>'
+        + '<select id="dsParcelas">'
+        + Array.from({length:24},(_,i)=>i+1).map(k=>'<option value="'+k+'"'
+            + (k===1?" selected":"")+'>'+(k===1?"à vista":k+"×")+'</option>').join("")
+        + '</select></div>'
+        + '<div class="field"><label for="dsParcComp">Competência das parcelas</label>'
+        + '<select id="dsParcComp">'
+        + '<option value="mes">dividida mês a mês</option>'
+        + '<option value="compra">tudo no mês da compra</option>'
+        + '</select></div></div>'
+        + '<div class="stage" id="dsParcPrev" hidden></div>' : "")
+    + (!nova && d.parcela_de>1 ? '<div class="stage">Esta é a parcela <b>'
+        + d.parcela_num+'/'+d.parcela_de+'</b> de uma compra parcelada. O que você '
+        + 'mudar aqui vale só para esta parcela.</div>' : "")
     + '<div class="field"><label for="dsForn">Fornecedor ou prestador</label>'
     + '<input id="dsForn" value="'+esc(d.fornecedor||"")+'" '
     + 'placeholder="quem recebeu — opcional"></div>'
@@ -11737,6 +11819,11 @@ function ligarDespesas(){
     renderFinanceiro(); toast("Despesa marcada como paga em "+fmtData(hojeISO())+".");
   }));
 
+  ["dsParcelas","dsParcComp","dsValor","dsComp","dsVenc"].forEach(id=>{
+    const el=$("#"+id); if(el){ el.addEventListener("change", previaParcelas);
+      el.addEventListener("input", previaParcelas); } });
+  previaParcelas();
+
   const sv=$("#dsSalvar");
   if(sv) sv.addEventListener("click", async ()=>{
     const desc = $("#dsDesc").value.trim();
@@ -11759,14 +11846,22 @@ function ligarDespesas(){
       nota_fiscal: $("#dsNF").value==="sim",
       nota_numero: $("#dsNFNum").value.trim()||null,
       observacao: $("#dsObs").value.trim()||null};
+
+    const nParc = (despForm && despForm.id) ? 1 : Number(($("#dsParcelas")||{}).value||1);
+    const linhas = nParc>1 ? serieParcelada(corpo, nParc,
+        (($("#dsParcComp")||{}).value||"mes")==="mes") : [corpo];
+
     const ok = await naNuvem(async ()=>{
       if(despForm && despForm.id) await DB.rest("PATCH","despesas?id=eq."+despForm.id, corpo);
       else await DB.rest("POST","despesas",
-        {clinica_id:DB.clinica, criado_por:DB.meuId, ...corpo});
+        linhas.map(l=>({clinica_id:DB.clinica, criado_por:DB.meuId, ...l})));
       await DB.carregarCaixa();
     }, "despesa");
     if(!ok) return;
-    despForm = null; renderFinanceiro(); toast("Despesa de "+fmtBRL(valor)+" salva.");
+    despForm = null; renderFinanceiro();
+    toast(nParc>1 ? nParc+"× de "+fmtBRL(linhas[0].valor)+" lançadas ("
+        + fmtBRL(valor)+" no total)."
+      : "Despesa de "+fmtBRL(valor)+" salva.");
   });
 
   /* ---- fixas ---- */
@@ -12557,6 +12652,13 @@ function renderFinanceiro(){
             || (b.dataset.fin==="taxas" && !verTaxa)
             || (b.dataset.fin==="precos" && !pode("precos"));
   });
+  /* "Onde vou lançar os valores recebidos pelo paciente? Qual campo?" —
+     a resposta é Cobranças, e a tela não dizia isso em lugar nenhum.
+     Qualquer botão com data-irfin leva para a aba certa. */
+  $$("#finPainel [data-irfin]").forEach(b=>b.addEventListener("click", ()=>{
+    finAba = b.dataset.irfin; renderFinanceiro();
+    window.scrollTo({top:0, behavior:"instant"});
+  }));
   const ab = $("#atrasoBtn");
   if(ab) ab.addEventListener("click", ()=>{ atrasoAberto = !atrasoAberto; renderFinanceiro(); });
   $$("#finPainel [data-atrasoPac]").forEach(b=>b.addEventListener("click", ()=>{
@@ -12847,14 +12949,27 @@ function htmlRecebidos(){
   const pgs = (S.pagamentos||[]).filter(pg=>meus.has(pg.cobranca_id))
     .sort((a,b)=>(a.pago_em||"")<(b.pago_em||"")?1:-1);
   const ver = pode("projecao");
-  if(!pgs.length) return '<div class="empty">Nenhum pagamento registrado.</div>';
+  const caminho = '<div class="stage"><b>Esta tela é o espelho, não a entrada.</b> '
+    + 'O que o paciente pagou se lança na cobrança dele: '
+    + '<b>Financeiro › Cobranças</b> › abrir a cobrança › '
+    + '<b>Registrar pagamento</b>. É lá que ficam a forma de pagamento, as '
+    + 'parcelas do cartão, a maquininha e a conta em que o dinheiro entrou. '
+    + 'Se a cobrança ainda não existe, crie em <b>+ Nova cobrança</b> — sem '
+    + 'cobrança não há onde pendurar o recebimento.'
+    + (pode("lancaCobranca")||pode("lancaPagamento")
+        ? '<div class="rowbtns" style="margin-top:8px">'
+          + '<button class="minibtn" data-irfin="cobrancas">Ir para Cobranças</button>'
+          + '</div>' : "")
+    + '</div>';
+  if(!pgs.length) return '<div class="empty">Nenhum pagamento registrado.</div>'
+    + '<div style="margin-top:10px">'+caminho+'</div>';
   const porForma = {};
   pgs.forEach(pg=>{ const k=pg.forma_enum||"—";
     porForma[k] = porForma[k] || {n:0, valor:0, taxa:0};
     porForma[k].n++; porForma[k].valor += Number(pg.valor||0);
     porForma[k].taxa += Number(pg.taxa||0); });
-  return `
-    <div class="sec-h"><h2>Por forma de pagamento</h2><span class="hint">tudo que já foi lançado</span></div>
+  return caminho + `
+    <div class="sec-h" style="margin-top:12px"><h2>Por forma de pagamento</h2><span class="hint">tudo que já foi lançado</span></div>
     <div class="card rolar"><table class="tab-rel">
       <thead><tr><th>Forma</th><th class="n">Lançamentos</th><th class="n">Bruto</th>
         ${ver?'<th class="n">Taxas</th><th class="n">Líquido</th><th class="n">% médio</th>':""}</tr></thead>
@@ -15975,6 +16090,8 @@ window.MD = {
   get pedParceiro(){ return pedParceiro; }, set pedParceiro(v){ pedParceiro = v; },
   get pedItens(){ return pedItens; }, set pedItens(v){ pedItens = v; },
   despesasPainel, somaDespesas, fluxoMesPor, despesasFiltradas,
+  serieParcelada, maisMeses, previaParcelas, htmlDespForm, htmlRecebidos,
+  get despForm(){ return despForm; }, set despForm(v){ despForm = v; },
   get despAba(){ return despAba; }, set despAba(v){ despAba = v; },
   get despMes(){ return despMes; }, set despMes(v){ despMes = v; },
   fmtCel, fmtCpf, fmtFone, fmtCnpjMask, fmtCep, mascarar, cpfValido, celularValido,
