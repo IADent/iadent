@@ -1746,7 +1746,7 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v77 · 24/11/2026";
+const VERSAO = "v78 · 24/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -7498,24 +7498,14 @@ function abrirPaciente(id){
   });
   carregarExames(id);
 }
-function fmtTel(v){
-  const d=(v||"").replace(/\D/g,"").slice(0,11);
-  if(d.length===11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
-  if(d.length===10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
-  return (v||"").trim();
-}
-function fmtCpf(v){
-  const d=(v||"").replace(/\D/g,"").slice(0,11);
-  if(d.length!==11) return (v||"").trim();
-  return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
-}
-function cpfValido(v){
-  const d=(v||"").replace(/\D/g,"");
-  if(d.length!==11 || /^(\d)\1{10}$/.test(d)) return false;
-  const dig=pos=>{ let s=0; for(let i=0;i<pos;i++) s+=Number(d[i])*(pos+1-i);
-    const r=11-(s%11); return r>=10?0:r; };
-  return dig(9)===Number(d[9]) && dig(10)===Number(d[10]);
-}
+/* AQUI HAVIA TRÊS FUNÇÕES DUPLICADAS: fmtTel, fmtCpf e cpfValido.
+   Declaração de função sobe para o topo do escopo, então a segunda
+   declaração — mais abaixo no arquivo — silenciosamente substituía
+   estas. Era código morto que parecia vivo: quem lesse daqui acharia
+   que telefone sai como "(11) 92520-3121", e o sistema inteiro usava
+   outro formato. Pior: bastava alguém reordenar o arquivo para o
+   formato do cadastro mudar sozinho.
+   Ficaram as versões de baixo, junto das outras máscaras. */
 /* id nulo = paciente NOVO. Antes disso, o único jeito de um paciente
    entrar no sistema era o dentista registrar um atendimento com um nome
    desconhecido — ou seja, a secretária, cuja função é cadastrar, não
@@ -9061,12 +9051,12 @@ function formParceiroHtml(f){
         ${campo("paPrazo","Prazo de entrega (dias)", e.prazo_dias, "opcional", "number")}
       </div>
       <div class="grid2">
-        ${campo("paTel","Telefone", e.telefone, "(11) 3333-4444")}
-        ${campo("paZap","WhatsApp", e.whatsapp, "(11) 99999-0000")}
+        ${campo("paTel","Telefone", fmtFone(e.telefone||""), "11 - 3333-4444")}
+        ${campo("paZap","WhatsApp", fmtCel(e.whatsapp||""), "11 - 99999-9999")}
       </div>
       <div class="grid2">
         ${campo("paEmail","E-mail", e.email, "contato@empresa.com.br", "email")}
-        ${campo("paCnpj","CNPJ", e.cnpj, "opcional")}
+        ${campo("paCnpj","CNPJ", fmtCnpjMask(e.cnpj||""), "opcional")}
       </div>
       ${campo("paEnd","Endereço", e.endereco, "rua, número, bairro")}
       <div class="field"><label for="paObs">Observação</label>
@@ -9118,16 +9108,20 @@ function ligarParceiros(){
   const cc = $("#paCancelar");
   if(cc) cc.addEventListener("click", ()=>{ parcForm = null; renderParceiros(); });
 
+  mascarar("#paTel",  fmtFone);
+  mascarar("#paZap",  fmtCel);
+  mascarar("#paCnpj", fmtCnpjMask);
+
   const sv = $("#paSalvar");
   if(sv) sv.addEventListener("click", async ()=>{
     const d = {
       tipo: $("#paTipo").value.trim(),
       nome: $("#paNome").value.trim(),
       contato: $("#paContato").value.trim() || null,
-      telefone: $("#paTel").value.trim() || null,
-      whatsapp: $("#paZap").value.trim() || null,
+      telefone: $("#paTel").value.replace(/\D/g,"") || null,
+      whatsapp: $("#paZap").value.replace(/\D/g,"") || null,
       email: $("#paEmail").value.trim() || null,
-      cnpj: $("#paCnpj").value.trim() || null,
+      cnpj: $("#paCnpj").value.replace(/\D/g,"") || null,
       endereco: $("#paEnd").value.trim() || null,
       observacao: $("#paObs").value.trim() || null,
       prazo_dias: $("#paPrazo").value.trim()==="" ? null : Math.max(0, Number($("#paPrazo").value)||0),
@@ -10624,7 +10618,9 @@ function htmlEquipe(){
             <input id="nvCro" placeholder="CRO-SP 00000" autocomplete="off"></div>
         </div>
         <div class="grid2">
-          <div class="field"><label for="nvTel">Telefone</label><input id="nvTel" autocomplete="off"></div>
+          <div class="field"><label for="nvTel">Celular</label>
+            <input id="nvTel" inputmode="numeric" class="mono" maxlength="17"
+              placeholder="11 - 99999-9999" autocomplete="off"></div>
           <div class="field"><label for="nvEsp">Especialidade</label><input id="nvEsp" autocomplete="off"></div>
         </div>
         <div class="row">
@@ -10853,12 +10849,22 @@ function ligarConfig(){
   ligarProcedimentos();
   if(cfg.aba === "recebimento") ligarContas();
   // unidade
+  /* a unidade era o único cadastro sem máscara nenhuma: o telefone
+     estava gravado como 11925203121 e o CNPJ como 14 dígitos crus */
+  mascarar("#cTel",  fmtFone);
+  mascarar("#cCnpj", fmtCnpjMask);
+  mascarar("#cCep",  fmtCep);
+
   const cs = $("#cSalvar");
   if(cs) cs.addEventListener("click", async ()=>{
     const abre=$("#cAbre").value, fecha=$("#cFecha").value;
     if(abre >= fecha){ toast("O horário de fechar precisa ser depois do de abrir."); return; }
     const d = {nome:$("#cNome").value.trim(), razao_social:$("#cRazao").value.trim()||null,
-      cnpj:$("#cCnpj").value.replace(/\D/g,"")||null, telefone:$("#cTel").value.trim()||null,
+      /* só dígitos no banco, máscara só na tela: era assim que o CNPJ e
+         o CEP já gravavam, e o telefone ia virar a exceção agora que
+         ganhou máscara. Guardar o traço faz o mesmo número parecer dois. */
+      cnpj:$("#cCnpj").value.replace(/\D/g,"")||null,
+      telefone:$("#cTel").value.replace(/\D/g,"")||null,
       email:$("#cEmail").value.trim()||null, cro_clinica:$("#cCro").value.trim()||null,
       cep:$("#cCep").value.replace(/\D/g,"")||null, logradouro:$("#cLog").value.trim()||null,
       numero:$("#cNum").value.trim()||null, complemento:$("#cComp").value.trim()||null,
@@ -10942,6 +10948,8 @@ function ligarConfig(){
   $$("#eqCores .cor-opt").forEach(b=>b.addEventListener("click", ()=>{
     equipeEdit.cor = equipeEdit.cor===b.dataset.cor ? null : b.dataset.cor; renderConfig();
   }));
+  mascarar("#eqTel", fmtCel);
+
   const es = $("#eqSalvar");
   if(es) es.addEventListener("click", async ()=>{
     /* A coluna no banco é `celular`, não `telefone` — a tela chama de
@@ -10979,7 +10987,8 @@ function ligarConfig(){
   if(ne) ne.addEventListener("click", async ()=>{
     const d = {nome:$("#nvNome").value.trim(), email:$("#nvEmail").value.trim(),
       perfil:$("#nvPerfil").value, cro:$("#nvCro").value.trim()||null,
-      telefone:$("#nvTel").value.trim()||null, especialidade:$("#nvEsp").value.trim()||null};
+      telefone:$("#nvTel").value.replace(/\D/g,"")||null,
+      especialidade:$("#nvEsp").value.trim()||null};
     if(d.nome.split(" ").filter(Boolean).length<2){ toast("Informe nome e sobrenome."); $("#nvNome").focus(); return; }
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(d.email)){ toast("E-mail inválido."); $("#nvEmail").focus(); return; }
     ne.disabled=true; ne.textContent="Enviando…";
@@ -15922,7 +15931,11 @@ window.MD = {
   despesasPainel, somaDespesas, fluxoMesPor, despesasFiltradas,
   get despAba(){ return despAba; }, set despAba(v){ despAba = v; },
   get despMes(){ return despMes; }, set despMes(v){ despMes = v; },
-  fmtCel, fmtCpf, parcelasDoPlano, contasAtivas,
+  fmtCel, fmtCpf, fmtFone, fmtCnpjMask, fmtCep, mascarar, cpfValido, celularValido,
+  /* o formulário do paciente é onde CPF e celular são digitados com
+     mais frequência: o teste precisa abri-lo sem depender de clique */
+  editarPaciente,
+  parcelasDoPlano, contasAtivas,
   /* nota fiscal do paciente: o bloco que a recepção cola no Emissor
      Nacional é TEXTO EXATO. Conferir isso pela tela é conferir o que a
      tela mostra, não o que a pessoa vai colar — por isso a função que
@@ -16030,6 +16043,33 @@ function fmtCel(v){
   if(d.length <= 7) return d.slice(0,2)+" - "+d.slice(2);
   return d.slice(0,2)+" - "+d.slice(2,7)+"-"+d.slice(7);
 }
+/* Telefone que pode ser FIXO ou celular — o do laboratório, o da
+   unidade. Mesmo desenho do celular (XX - ...), mudando só o
+   agrupamento: 10 dígitos viram XX - XXXX-XXXX e 11, XX - XXXXX-XXXX.
+   Um formato só para a casa inteira; o que muda é o número, não o
+   estilo. */
+function fmtFone(v){
+  const d = soDigitos(v).slice(0,11);
+  if(d.length <= 2) return d;
+  if(d.length <= 6) return d.slice(0,2)+" - "+d.slice(2);
+  if(d.length <= 10) return d.slice(0,2)+" - "+d.slice(2,6)+"-"+d.slice(6);
+  return d.slice(0,2)+" - "+d.slice(2,7)+"-"+d.slice(7);
+}
+/* CNPJ e CEP com máscara progressiva, pelo mesmo motivo: campo que só
+   formata quando está completo deixa o cadastro cheio de número cru. */
+function fmtCnpjMask(v){
+  const d = soDigitos(v).slice(0,14);
+  if(d.length <= 2) return d;
+  if(d.length <= 5) return d.slice(0,2)+"."+d.slice(2);
+  if(d.length <= 8) return d.slice(0,2)+"."+d.slice(2,5)+"."+d.slice(5);
+  if(d.length <= 12) return d.slice(0,2)+"."+d.slice(2,5)+"."+d.slice(5,8)+"/"+d.slice(8);
+  return d.slice(0,2)+"."+d.slice(2,5)+"."+d.slice(5,8)+"/"+d.slice(8,12)+"-"+d.slice(12);
+}
+function fmtCep(v){
+  const d = soDigitos(v).slice(0,8);
+  return d.length <= 5 ? d : d.slice(0,5)+"-"+d.slice(5);
+}
+
 /* liga a máscara ao campo: formata enquanto digita e mantém o cursor no
    fim, que é onde ele está em 99% das digitações de telefone e CPF */
 function mascarar(sel, fn){
