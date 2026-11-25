@@ -980,6 +980,13 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 .colb{display:flex;flex-direction:column;gap:16px;min-width:0}
 .navfoot{display:none}
 /* rodapé do conteúdo: só no celular, onde a lateral não existe */
+.faixa-versao{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--warn-soft);color:var(--warn);border-bottom:1px solid var(--line);
+  padding:9px 14px;font-size:13px;font-weight:600}
+.faixa-versao[hidden]{display:none}
+.faixa-versao button{background:var(--warn);color:var(--ground);border:none;
+  border-radius:8px;padding:7px 13px;font-size:12.5px;font-weight:700;cursor:pointer;
+  margin-left:auto}
 .rodape-app{margin:20px 2px 6px;padding-top:10px;border-top:1px solid var(--line);
   font-size:10px;line-height:1.6;color:var(--ink-3);text-transform:uppercase;
   letter-spacing:.08em;text-align:center}
@@ -1175,6 +1182,10 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
 
 <!-- ============ APP ============ -->
 <div class="app" id="appRoot" hidden>
+  <div class="faixa-versao" id="faixaVersao" hidden>
+    <span id="faixaVersaoTxt">Versão nova disponível.</span>
+    <button id="faixaVersaoBtn">Atualizar agora</button>
+  </div>
   <div class="topbar">
     <div class="logo">
       <svg viewBox="0 0 100 100" aria-hidden="true">
@@ -1675,7 +1686,14 @@ const PERFIS = {
        O que NÃO vem junto: prontuário e o que é clínico seguem fechados. */
     atender:false, prontuario:false, verClinico:false, estoque:false, agenda:true, financeiro:true, cadastro:false, editaCadastro:true, admin:false,
     custo:true,
-    parceiros:true, parceirosEdita:false,
+    /* parceirosEdita:true — "meu perfil não está habilitado o cadastro,
+       precisa deixar disponível". É ela quem paga o laboratório e o
+       fornecedor, então é ela quem tem o dado do cadastro na mão. Fica
+       registrado o que isso abre: o cadastro do parceiro guarda dados
+       bancários, e quem edita o cadastro pode redirecionar um pagamento.
+       A proteção aqui é a auditoria (toda alteração fica gravada com
+       autor e hora), não o bloqueio. */
+    parceiros:true, parceirosEdita:true,
     valores:true, lancaLote:false, caixa:true, projecao:true, relatorios:true,
     lancaPagamento:true, lancaCobranca:true, despesas:true, contas:true,
     precos:false, precoTodos:true, soMinhas:false},
@@ -1746,7 +1764,31 @@ const pode = k => !!(usuario && PERFIS[usuario.perfil][k]);
 /* Versão visível na tela. Sem isso, "troquei isso semana passada" e
    "aqui não mudou nada" são as duas verdadeiras ao mesmo tempo, e não dá
    para saber qual cópia a pessoa está usando. */
-const VERSAO = "v80 · 24/11/2026";
+/* COMO O PACIENTE CHEGOU — pedido do Dr. Leonardo.
+   Lista fechada de propósito: origem digitada à mão vira "insta", "Instagram",
+   "ig" e "rede social" no mesmo cadastro, e aí não dá para contar nada. O que
+   não cabe na lista vai no detalhe ao lado — e é lá que mora o que importa na
+   indicação: QUEM indicou. */
+const ORIGENS = [["instagram","Instagram"],["google","Google"],
+  ["indicacao","Indicação"],["facebook","Facebook"],["site","Site da clínica"],
+  ["fachada","Passou em frente / fachada"],["convenio","Convênio"],
+  ["whatsapp","WhatsApp"],["outro","Outro"]];
+const ROTULO_ORIGEM_PAC = Object.fromEntries(ORIGENS);   /* nome do paciente, não confundir com ROTULO_ORIGEM do preço da cobrança */
+/* Endereço em uma linha só, pulando o que está em branco: ficha de paciente
+   com "—, —, — · — — " é pior do que ficha sem endereço. */
+function enderecoPac(p){
+  if(!p) return "";
+  const rua = [p.log, p.num].filter(Boolean).join(", ");
+  const l1  = [rua, p.comp].filter(Boolean).join(" · ");
+  const l2  = [p.bairro, [p.cidade, p.uf].filter(Boolean).join("/")]
+              .filter(Boolean).join(" · ");
+  const cep = p.cep ? "CEP " + fmtCep(p.cep) : "";
+  return [l1, l2, cep].filter(Boolean).join(" — ");
+}
+const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
+  "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
+
+const VERSAO = "v81 · 25/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2002,6 +2044,7 @@ const DB = {
         .catch(()=>DB.rest("GET","procedimento_kit?select=procedimento_id,material_id,quantidade")),
       DB.rest("GET","estoque?select=material_id,saldo"),
       DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,observacao,"+
+        "cep,logradouro,numero,complemento,bairro,cidade,uf,origem,origem_detalhe,"+
         "pacientes_clinico(observacao)&order=nome")
         .catch(()=>DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,"+
           "pacientes_clinico(observacao)&order=nome")),
@@ -2024,7 +2067,10 @@ const DB = {
            obsGeral = recado da recepção (pacientes.observacao).
            Duas coisas diferentes, e misturá-las faria a secretária
            escrever no prontuário ou perder o próprio recado. */
-        obs:(cl&&cl.observacao)||"", obsGeral:p.observacao||""};
+        obs:(cl&&cl.observacao)||"", obsGeral:p.observacao||"",
+        cep:p.cep||"", log:p.logradouro||"", num:p.numero||"", comp:p.complemento||"",
+        bairro:p.bairro||"", cidade:p.cidade||"", uf:p.uf||"",
+        origem:p.origem||"", origemDet:p.origem_detalhe||""};
     });
     /* consentimento de gravação: a tela precisa dele ANTES de o dentista
        apertar "gravar a consulta". Mapeado DEPOIS dos pacientes, senão
@@ -2110,7 +2156,12 @@ const DB = {
   async gravarPaciente(p){
     const corpo = {nome:p.nome, nascimento:p.nasc||null, sexo:SEXO_APP2DB[p.sexo]||null,
       cpf:(p.cpf||"").replace(/\D/g,"")||null, telefone:p.tel||null, email:p.email||null,
-      observacao: (p.obsGeral||"").trim() || null};
+      observacao: (p.obsGeral||"").trim() || null,
+      cep:(p.cep||"").replace(/\D/g,"")||null, logradouro:(p.log||"").trim()||null,
+      numero:(p.num||"").trim()||null, complemento:(p.comp||"").trim()||null,
+      bairro:(p.bairro||"").trim()||null, cidade:(p.cidade||"").trim()||null,
+      uf:(p.uf||"").trim()||null,
+      origem:p.origem||null, origem_detalhe:(p.origemDet||"").trim()||null};
     if(UID.pac[p.id]){
       /* return=representation e CONFERIR o retorno: quando a RLS recusa
          um UPDATE, o PostgREST responde 200 com zero linhas — sem erro
@@ -7435,6 +7486,10 @@ function abrirPaciente(id){
           <div><dt>CPF</dt><dd>${p.cpf?`<span class="mono">${p.cpf}</span>`:vazio}</dd></div>
           <div><dt>Telefone</dt><dd>${p.tel?`<a href="tel:${p.tel.replace(/\D/g,"")}" class="lnk mono">${p.tel}</a>`:vazio}</dd></div>
           <div><dt>E-mail</dt><dd>${p.email?`<a href="mailto:${p.email}" class="lnk">${p.email}</a>`:vazio}</dd></div>
+          <div><dt>Endereço</dt><dd>${enderecoPac(p)||vazio}</dd></div>
+          <div><dt>Como chegou</dt><dd>${p.origem
+            ? ROTULO_ORIGEM_PAC[p.origem]+(p.origemDet?' <small style="color:var(--ink-3)">· '+esc(p.origemDet)+'</small>':"")
+            : vazio}</dd></div>
         </dl>
         ${pend?`<div class="pend">${pend} campo(s) em branco — ${editaCad?"complete pelo botão abaixo.":"peça à secretária para completar."}</div>`:""}
         ${editaCad?`<div class="rowbtns"><button class="minibtn" id="editPac">Editar cadastro</button></div>`:""}
@@ -7553,6 +7608,44 @@ function editarPaciente(id){
       <div class="field"><label for="edCpf">CPF</label><input id="edCpf" inputmode="numeric" class="mono" placeholder="000.000.000-00" maxlength="14" value="${esc(p.cpf)}"></div>
       <div class="field"><label for="edTel">Celular / WhatsApp</label><input id="edTel" type="tel" inputmode="numeric" class="mono" placeholder="11 - 99999-9999" maxlength="17" value="${esc(p.tel)}"></div>
       <div class="field"><label for="edEmail">E-mail</label><input id="edEmail" type="email" placeholder="nome@email.com" value="${esc(p.email)}"></div>
+      <div class="eyebrow" style="margin-top:4px">Endereço</div>
+      <div class="grid2">
+        <div class="field"><label for="edCep">CEP</label>
+          <input id="edCep" inputmode="numeric" class="mono" placeholder="00000-000"
+            maxlength="9" value="${esc(p.cep)}"></div>
+        <div class="field"><label for="edNum">Número</label>
+          <input id="edNum" value="${esc(p.num)}"></div>
+      </div>
+      <div class="field"><label for="edLog">Logradouro</label>
+        <input id="edLog" value="${esc(p.log)}" placeholder="rua, avenida"></div>
+      <div class="grid2">
+        <div class="field"><label for="edComp">Complemento</label>
+          <input id="edComp" value="${esc(p.comp)}" placeholder="apto, bloco"></div>
+        <div class="field"><label for="edBairro">Bairro</label>
+          <input id="edBairro" value="${esc(p.bairro)}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="edCidade">Cidade</label>
+          <input id="edCidade" value="${esc(p.cidade)}"></div>
+        <div class="field"><label for="edUf">UF</label>
+          <select id="edUf"><option value="">—</option>
+            ${UFS_PAC.map(u=>`<option ${p.uf===u?"selected":""}>${u}</option>`).join("")}
+          </select></div>
+      </div>
+
+      <div class="eyebrow" style="margin-top:4px">Como chegou até a clínica</div>
+      <div class="grid2">
+        <div class="field"><label for="edOrigem">Origem</label>
+          <select id="edOrigem"><option value="">— não informado —</option>
+            ${ORIGENS.map(([v2,r])=>`<option value="${v2}" ${p.origem===v2?"selected":""}>${r}</option>`).join("")}
+          </select></div>
+        <div class="field"><label for="edOrigemDet">Detalhe</label>
+          <input id="edOrigemDet" value="${esc(p.origemDet)}"
+            placeholder="quem indicou, qual campanha"></div>
+      </div>
+      <div class="hint" style="margin-top:-4px">Na indicação, escreva <b>quem</b> indicou:
+        é o que depois mostra de quem vem o paciente.</div>
+
       <div class="field"><label for="edObsGeral">Observação do cadastro</label>
         <input id="edObsGeral" value="${esc(p.obsGeral)}"
           placeholder="só avaliação · veio por indicação · prefere a tarde">
@@ -7567,6 +7660,7 @@ function editarPaciente(id){
   if(novo) setTimeout(()=>{ const n=$("#edNome"); if(n) n.focus(); }, 60);
   mascarar("#edCpf", fmtCpf);
   mascarar("#edTel", fmtCel);
+  mascarar("#edCep", fmtCep);
   $("#edCancelar").addEventListener("click", ()=>{
     if(novo){ pacAberto=null; renderPacientes(); } else abrirPaciente(id);
   });
@@ -7590,6 +7684,11 @@ function editarPaciente(id){
     p.nome=nome; p.nasc=nasc; p.sexo=$("#edSexo").value; p.cpf=fmtCpf(cpf);
     p.tel=fmtCel($("#edTel").value); p.email=email;
     p.obsGeral=$("#edObsGeral").value.trim();
+    p.cep=$("#edCep").value.trim(); p.log=$("#edLog").value.trim();
+    p.num=$("#edNum").value.trim(); p.comp=$("#edComp").value.trim();
+    p.bairro=$("#edBairro").value.trim(); p.cidade=$("#edCidade").value.trim();
+    p.uf=$("#edUf").value;
+    p.origem=$("#edOrigem").value; p.origemDet=$("#edOrigemDet").value.trim();
     if(clinico) p.obs=$("#edObs").value.trim();
     save();
     (async ()=>{
@@ -11627,7 +11726,11 @@ function htmlDespForm(d){
        meses seguintes". Uma linha por parcela: é assim que o fluxo de caixa, o
        relatório por competência e o "a pagar" funcionam sem exceção nenhuma.
        Só aparece ao LANÇAR. Editando, se edita a parcela aberta. */
-    + (nova ? '<div class="grid2">'
+    /* Mostrar o campo só em "+ Lançar despesa" foi um erro meu, e caro: ela
+       tentou EDITAR o lançamento que já existia para dizer que era 10x, não
+       achou o campo, e concluiu que a versão nova não tinha subido. Agora
+       editar uma despesa que ainda não é série também parcela. */
+    + ((nova || !(d.parcela_de>1)) ? '<div class="grid2">'
         + '<div class="field"><label for="dsParcelas">Parcelas</label>'
         + '<select id="dsParcelas">'
         + Array.from({length:24},(_,i)=>i+1).map(k=>'<option value="'+k+'"'
@@ -11667,6 +11770,15 @@ function htmlDespForm(d){
     + '<div class="row"><button class="btn primary" style="flex:1" id="dsSalvar">'
     + 'Salvar despesa</button>'
     + '<button class="btn" id="dsCancelar">Cancelar</button></div>'
+    /* "No financeiro eu tenho a opção de editar mas não de excluir um
+       lançamento errado." Lançamento errado que não se apaga fica no
+       relatório para sempre. */
+    + (nova ? "" : '<div class="rowbtns" style="margin-top:4px">'
+        + '<button class="minibtn" id="dsExcluir" style="color:var(--crit)">'
+        + 'Excluir este lançamento</button>'
+        + (d.parcela_de>1 ? '<button class="minibtn" id="dsExcluirSerie" '
+            + 'style="color:var(--crit)">Excluir as '+d.parcela_de+' parcelas</button>' : "")
+        + '</div>')
     + '<div class="stage">Competência e pagamento são datas diferentes de propósito: a '
     + 'energia de março chega em abril e é custo de março. O relatório por competência '
     + 'mostra o custo do mês; o fluxo de caixa mostra quando o dinheiro sai.</div>'
@@ -11819,6 +11931,39 @@ function ligarDespesas(){
     renderFinanceiro(); toast("Despesa marcada como paga em "+fmtData(hojeISO())+".");
   }));
 
+  const dex = $("#dsExcluir");
+  if(dex) dex.addEventListener("click", async ()=>{
+    const d = despForm; if(!d || !d.id) return;
+    if(!confirm("Excluir \""+d.descricao+"\" de "+fmtBRL(d.valor)+"?\n\n"
+      + "O lançamento some do fluxo de caixa e dos relatórios. Não dá para desfazer."))
+      return;
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("DELETE","despesas?id=eq."+d.id);
+      await DB.carregarCaixa();
+    }, "exclusão da despesa");
+    if(!ok) return;
+    despForm = null; renderFinanceiro(); toast("Lançamento excluído.");
+  });
+
+  const dexs = $("#dsExcluirSerie");
+  if(dexs) dexs.addEventListener("click", async ()=>{
+    const d = despForm; if(!d || !d.parcela_grupo) return;
+    const irmas = (S.despesas||[]).filter(x=>x.parcela_grupo===d.parcela_grupo);
+    const soma = cent(irmas.reduce((a,x)=>a+Number(x.valor||0),0));
+    const pagas = irmas.filter(x=>x.paga).length;
+    if(!confirm("Excluir as "+irmas.length+" parcelas desta compra ("
+      + fmtBRL(soma)+" no total)?"
+      + (pagas ? "\n\nATENÇÃO: "+pagas+" parcela(s) já constam como pagas." : "")
+      + "\n\nNão dá para desfazer.")) return;
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("DELETE","despesas?parcela_grupo=eq."+d.parcela_grupo);
+      await DB.carregarCaixa();
+    }, "exclusão das parcelas");
+    if(!ok) return;
+    despForm = null; renderFinanceiro();
+    toast(irmas.length+" parcelas excluídas.");
+  });
+
   ["dsParcelas","dsParcComp","dsValor","dsComp","dsVenc"].forEach(id=>{
     const el=$("#"+id); if(el){ el.addEventListener("change", previaParcelas);
       el.addEventListener("input", previaParcelas); } });
@@ -11847,14 +11992,25 @@ function ligarDespesas(){
       nota_numero: $("#dsNFNum").value.trim()||null,
       observacao: $("#dsObs").value.trim()||null};
 
-    const nParc = (despForm && despForm.id) ? 1 : Number(($("#dsParcelas")||{}).value||1);
+    const nParc = Number(($("#dsParcelas")||{}).value||1);
     const linhas = nParc>1 ? serieParcelada(corpo, nParc,
         (($("#dsParcComp")||{}).value||"mes")==="mes") : [corpo];
+    const editando = !!(despForm && despForm.id);
 
     const ok = await naNuvem(async ()=>{
-      if(despForm && despForm.id) await DB.rest("PATCH","despesas?id=eq."+despForm.id, corpo);
-      else await DB.rest("POST","despesas",
-        linhas.map(l=>({clinica_id:DB.clinica, criado_por:DB.meuId, ...l})));
+      if(editando && nParc>1){
+        /* à vista virando parcelado: a linha que já existe vira a 1ª parcela
+           (preserva id, histórico e o que já estiver apontando para ela) e as
+           outras entram novas. */
+        await DB.rest("PATCH","despesas?id=eq."+despForm.id, linhas[0]);
+        await DB.rest("POST","despesas",
+          linhas.slice(1).map(l=>({clinica_id:DB.clinica, criado_por:DB.meuId, ...l})));
+      }else if(editando){
+        await DB.rest("PATCH","despesas?id=eq."+despForm.id, corpo);
+      }else{
+        await DB.rest("POST","despesas",
+          linhas.map(l=>({clinica_id:DB.clinica, criado_por:DB.meuId, ...l})));
+      }
       await DB.carregarCaixa();
     }, "despesa");
     if(!ok) return;
@@ -12672,7 +12828,7 @@ function renderFinanceiro(){
 
   const imp = $("#fluxoImprimir"); if(imp) imp.addEventListener("click", ()=>window.print());
   const cc = $("#confCsv");
-  if(cc) cc.addEventListener("click", ()=>baixarCSV("conferencia-por-cliente", linhasConferenciaCSV()));
+  if(cc) cc.addEventListener("click", ()=>baixarCSV("conferencia-por-paciente", linhasConferenciaCSV()));
   const csv = $("#fluxoCsv");
   if(csv) csv.addEventListener("click", ()=>baixarCSV("fluxo-de-caixa",
     [["Mês","Bruto","Taxas","Líquido","Recebido","Previsto","Parcelas","Atrasadas"]].concat(
@@ -12902,16 +13058,16 @@ function htmlConferenciaPaciente(){
   linhas.sort((a,b)=> (a.cobs?1:0)-(b.cobs?1:0) || a.nome.localeCompare(b.nome,"pt-BR"));
   const semLancar = linhas.filter(l=>!l.cobs).length;
   return `
-    <div class="sec-h" style="margin-top:16px"><h2>Conferência por cliente</h2>
+    <div class="sec-h" style="margin-top:16px"><h2>Conferência por paciente</h2>
       <span class="hint">para ver num relance se alguém ficou sem lançar</span></div>
     <div class="row naoimprime" style="margin-bottom:8px">
       <button class="btn" id="confCsv">Exportar CSV</button>
     </div>
     ${semLancar?`<div class="stage" style="border-color:var(--warn)">
-      <b>${semLancar} cliente(s) com atendimento e nenhuma cobrança lançada.</b>
+      <b>${semLancar} paciente(s) com atendimento e nenhuma cobrança lançada.</b>
       Aparecem no topo da lista.</div>`:""}
     <div class="card rolar"><table class="tab-rel">
-      <thead><tr><th>Cliente</th><th class="n">Atend.</th><th class="n">Cobrado</th>
+      <thead><tr><th>Paciente</th><th class="n">Atend.</th><th class="n">Cobrado</th>
         <th class="n">Recebido</th><th class="n">Em aberto</th></tr></thead>
       <tbody>${linhas.map(l=>`<tr${l.cobs?"":' style="background:var(--warn-soft)"'}>
         <td><b>${l.nome}</b>${l.cobs?"":' <span class="pill warn">sem cobrança</span>'}</td>
@@ -12921,7 +13077,7 @@ function htmlConferenciaPaciente(){
         <td class="n">${l.aberto>0?`<b style="color:var(--warn)">${fmtBRL(l.aberto)}</b>`:
           (l.cobs?'<span class="pill ok">quitado</span>':'<span class="vaga">—</span>')}</td>
       </tr>`).join("")}</tbody>
-      <tfoot><tr><td>Total · ${linhas.length} cliente(s)</td>
+      <tfoot><tr><td>Total · ${linhas.length} paciente(s)</td>
         <td class="n">${linhas.reduce((a,l)=>a+l.atds,0)}</td>
         <td class="n">${fmtBRL(linhas.reduce((a,l)=>a+l.cobrado,0))}</td>
         <td class="n">${fmtBRL(linhas.reduce((a,l)=>a+l.pago,0))}</td>
@@ -12930,7 +13086,7 @@ function htmlConferenciaPaciente(){
 }
 
 function linhasConferenciaCSV(){
-  const out = [["Cliente","Atendimentos","Cobrado","Recebido","Em aberto","Situação"]];
+  const out = [["Paciente","Atendimentos","Cobrado","Recebido","Em aberto","Situação"]];
   (S.pacientes||[]).forEach(p=>{
     const cobs = cobrancasDe(p.id);
     const atds = (S.atendimentos||[]).filter(a=>a.pac===p.id).length;
@@ -13547,7 +13703,7 @@ function ligarRodape(){
 function entrarNoApp(){
   $("#loginScreen").hidden=true; $("#appRoot").hidden=false;
   aplicarPermissoes(); renderAll(); renderAgente();
-  pintarClinica(); ligarRodape();
+  pintarClinica(); ligarRodape(); ligarFaixaVersao();
   exigirCadastroSeFaltar();
   // a mini agenda da lateral precisa dos compromissos de hoje já no
   // primeiro segundo; sem isso o atalho abre vazio e parece quebrado
@@ -14148,8 +14304,13 @@ function renderCaixa(pacId){
     : "";
 
   box.innerHTML = `
-    <div class="sec-h" style="margin-top:14px"><h2>Pagamentos</h2>
+    <div class="sec-h" style="margin-top:14px"><h2>Pagamentos do paciente</h2>
       <span class="hint">${ver?"valores, taxa e previsão de crédito":"valores e forma de pagamento"}</span></div>
+    <div class="stage" style="margin-bottom:8px"><b>É aqui que se lança o que o
+      paciente pagou</b>, sem sair da ficha: abra a cobrança abaixo e use
+      <b>Registrar pagamento</b> — forma de pagamento, parcelas do cartão,
+      maquininha e conta ficam lá. Não existindo cobrança ainda, crie em
+      <b>+ Nova cobrança</b>. O mesmo caminho existe em Financeiro › Cobranças.</div>
     <div class="tiles">
       <div class="tile"><b>${fmtBRL(r.cobrado)}</b><span>cobrado</span></div>
       <div class="tile ok"><b>${fmtBRL(r.pago)}</b><span>pago</span></div>
@@ -16057,7 +16218,48 @@ function renderAll(){
    para o teste automatizado alcançar as funções sem que todo o app viva
    no escopo global. Não expõe nada que a tela já não mostre a quem está
    logado — quem decide o que pode ser lido é o RLS, no banco. */
+/* ---------- AVISO DE VERSÃO NOVA ----------
+   "Ainda não consigo visualizar as últimas alterações." A versão nova estava
+   no ar havia horas; a tela dela é que continuava a antiga, e nada avisava.
+   Num aplicativo instalado isso é o normal, não a exceção: quem não fecha o
+   app nunca pede a página de novo, e fica meses numa versão velha achando que
+   o defeito não foi corrigido.
+
+   Então o app passa a perguntar: busca o próprio index.html sem cache, lê a
+   VERSAO de lá e compara com a que está rodando. Diferente, aparece a faixa.
+   Atualizar é um reload — nada do que está no banco se perde. */
+let versaoServidor = null;
+async function conferirVersao(){
+  if(MODO !== "nuvem" && location.protocol === "file:") return;
+  try{
+    const r = await fetch("index.html?v=" + Date.now(), {cache:"no-store"});
+    if(!r.ok) return;
+    const t = await r.text();
+    const m = t.match(/const VERSAO = "(v[0-9]+[^"]*)"/);
+    if(!m) return;
+    versaoServidor = m[1];
+    const faixa = $("#faixaVersao");
+    if(!faixa) return;
+    const nova = versaoServidor.split(" ")[0] !== VERSAO.split(" ")[0];
+    faixa.hidden = !nova;
+    if(nova) $("#faixaVersaoTxt").textContent =
+      "Versão nova disponível (" + versaoServidor.split(" ")[0] + "). "
+      + "Você está na " + VERSAO.split(" ")[0] + ".";
+  }catch(e){ /* sem rede: não é assunto desta faixa */ }
+}
+function ligarFaixaVersao(){
+  const b = $("#faixaVersaoBtn");
+  if(b) b.addEventListener("click", ()=>location.reload());
+  conferirVersao();
+  /* ao voltar para o app e de hora em hora — sem bater no servidor à toa */
+  addEventListener("visibilitychange", ()=>{ if(!document.hidden) conferirVersao(); });
+  setInterval(conferirVersao, 60*60*1000);
+}
+
 window.MD = {
+  conferirVersao, get versaoServidor(){ return versaoServidor; },
+  enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
+  editarPaciente, abrirPaciente, renderPacientes,
   get estado(){ return S; },
   /* o acesso fica acessível ao teste: distinguir "banco fora do ar" de
      "senha errada" é justamente o que não se consegue conferir pela tela */
