@@ -1788,7 +1788,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v81 · 25/11/2026";
+const VERSAO = "v82 · 25/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2565,7 +2565,8 @@ const DB = {
           "observacao,lancado,pago,em_aberto,no_caixa,proximo_vencimento,entrega_atrasada,"+
           "pagamento_vencido,linhas,recebidas&order=pedido_em.desc,numero.desc"),
         DB.rest("GET","vw_parceiro_resumo?select=parceiro_id,pedidos,em_andamento,comprado,"+
-          "comprado_ano,pago,em_aberto,proximo_vencimento,entregas_atrasadas")
+          "comprado_ano,pago,em_aberto,proximo_vencimento,entregas_atrasadas,"+
+          "despesas_diretas,pago_direto,aberto_direto,direto_ano")
       ]);
       S.pedidos = ped; S.parceiroResumo = res;
       S.pedidoItens = ped.length
@@ -9108,10 +9109,18 @@ function cartaoParceiro(p, edita){
             dava para saber quanto a clínica compra de cada um nem quanto
             deve. Agora o cartão responde as duas coisas. */
           const r = pode("valores") ? resumoParceiro(p.id) : null;
-          if(!r || !Number(r.pedidos)) return "";
+          /* Antes só aparecia quando havia PEDIDO. Quem lança tudo por
+             Despesas — que é como a clínica trabalha — via o cartão mudo,
+             como se nunca tivesse pago nada ao parceiro. */
+          const nPed = Number((r||{}).pedidos||0);
+          const nDes = Number((r||{}).despesas_diretas||0);
+          if(!r || (!nPed && !nDes)) return "";
+          const abertoTot = Number(r.em_aberto||0) + Number(r.aberto_direto||0);
           return `<div style="font-size:11.5px;color:var(--ink-2);margin-top:6px">
-            ${r.pedidos} pedido(s) · comprado <b>${fmtBRL(r.comprado)}</b>
-            ${Number(r.em_aberto)>0.005?` · em aberto <b>${fmtBRL(r.em_aberto)}</b>`:" · tudo pago"}
+            ${nPed?`${nPed} pedido(s) · comprado <b>${fmtBRL(r.comprado)}</b>`:""}
+            ${nPed&&nDes?" · ":""}
+            ${nDes?`${nDes} despesa(s) · pago <b>${fmtBRL(r.pago_direto)}</b>`:""}
+            ${abertoTot>0.005?` · em aberto <b>${fmtBRL(cent(abertoTot))}</b>`:" · tudo pago"}
             ${r.proximo_vencimento?` · próximo vencimento ${fmtData(r.proximo_vencimento)}`:""}
             ${Number(r.entregas_atrasadas)>0
               ? ` · <span style="color:var(--crit)">${r.entregas_atrasadas} entrega(s) atrasada(s)</span>`:""}
@@ -11570,10 +11579,19 @@ function htmlDespLancamentos(){
     + '<div class="tile"><b>'+fmtBRL(s.fixa)+'</b><span>fixas</span></div>'
     + '<div class="tile"><b>'+fmtBRL(s.variavel)+'</b><span>variáveis</span></div>'
     + '</div>'
-    + '<div class="stage" style="margin-top:8px">A compra de material odontológico '
-    + '<b>não</b> é lançada aqui: ela já entra no caixa pela nota fiscal do estoque, e '
-    + 'lançar de novo contaria duas vezes. A taxa de maquininha também não — ela já sai '
-    + 'do bruto no recebimento.</div>'
+    /* O AVISO ANTERIOR ESTAVA ERRADO e atrapalhou de verdade: dizia que
+       compra de material não se lança aqui. Isso vale só para material que
+       entra no ESTOQUE com custo — e a clínica não usa o estoque (zero lotes
+       lançados). Na prática o aviso mandava não fazer o certo. Despesas é
+       onde está o custo do consultório inteiro, fixo e variável. */
+    + '<div class="stage" style="margin-top:8px">Aqui entra <b>todo</b> o dinheiro que '
+    + 'sai: fixos (aluguel, faxineira, marketing) e variáveis (alimentação, compra de '
+    + 'material). Escolhendo o <b>parceiro cadastrado</b> no lançamento, a despesa '
+    + 'também aparece na ficha dele.<br>'
+    + 'Duas coisas que <b>não</b> se lançam aqui: a taxa da maquininha, que já sai do '
+    + 'bruto no recebimento; e material que você tenha dado entrada no <b>estoque com '
+    + 'nota e custo</b> — esse já conta pelo estoque, e lançar de novo contaria duas '
+    + 'vezes. Hoje a clínica não usa o estoque, então não há esse risco.</div>'
     + '<div class="rowbtns" style="margin-top:8px">'
     + '<button class="minibtn" id="dsCsv">Baixar CSV</button>'
     + '<button class="minibtn" id="dsImp">Imprimir</button></div>'
@@ -11745,9 +11763,24 @@ function htmlDespForm(d){
     + (!nova && d.parcela_de>1 ? '<div class="stage">Esta é a parcela <b>'
         + d.parcela_num+'/'+d.parcela_de+'</b> de uma compra parcelada. O que você '
         + 'mudar aqui vale só para esta parcela.</div>' : "")
+    /* O PARCEIRO ENTRA AQUI, e é o que fecha a conta entre as duas telas.
+       Decisão do Luiz: Parceiros é o CADASTRO (e o link de WhatsApp); o
+       dinheiro todo se lança em Despesas, porque é lá que está o custo do
+       consultório inteiro — fixo e variável, junto. A coluna parceiro_id já
+       existia na tabela e nunca era preenchida pela tela: o resultado era que
+       a ficha do parceiro mostrava R$ 0 pago para quem paga tudo por aqui. */
+    + '<div class="field"><label for="dsParceiro">Parceiro cadastrado</label>'
+    + '<select id="dsParceiro"><option value="">— não é um parceiro cadastrado —</option>'
+    + (S.parceiros||[]).filter(x=>x.ativo!==false)
+        .map(x=>'<option value="'+x.id+'"'+(d.parceiro_id===x.id?" selected":"")+'>'
+          + esc(x.nome)+'</option>').join("")
+    + '</select>'
+    + '<div class="hint" style="margin-top:5px">Escolhendo aqui, esta despesa '
+    + 'aparece na ficha do parceiro — é assim que se sabe quanto já foi pago '
+    + 'para cada laboratório e fornecedor.</div></div>'
     + '<div class="field"><label for="dsForn">Fornecedor ou prestador</label>'
     + '<input id="dsForn" value="'+esc(d.fornecedor||"")+'" '
-    + 'placeholder="quem recebeu — opcional"></div>'
+    + 'placeholder="quem recebeu, quando não é parceiro cadastrado"></div>'
     + '<div class="grid2">'
     + '<div class="field"><label for="dsSala">Sala — se a despesa é de uma sala só</label>'
     + '<select id="dsSala"><option value="">— da clínica —</option>'
@@ -11987,6 +12020,7 @@ function ligarDespesas(){
       vencimento: $("#dsVenc").value||null, pago_em: pago,
       forma, conta_id: $("#dsConta").value||null,
       fornecedor: $("#dsForn").value.trim()||null,
+      parceiro_id: ($("#dsParceiro") ? $("#dsParceiro").value : "") || null,
       sala_id: $("#dsSala").value||null, dentista_id: $("#dsDent").value||null,
       nota_fiscal: $("#dsNF").value==="sim",
       nota_numero: $("#dsNFNum").value.trim()||null,
