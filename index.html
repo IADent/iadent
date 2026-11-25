@@ -981,6 +981,47 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 .navfoot{display:none}
 /* rodapé do conteúdo: só no celular, onde a lateral não existe */
 
+
+/* ---------- mapa do estoque ---------- */
+.mapa-mat{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);
+  padding:11px 12px;margin-bottom:9px}
+.mapa-mat.alerta{border-color:var(--warn)}
+.mapa-mat.critico{border-color:var(--crit)}
+.mapa-cab{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.mapa-cab b{font-size:14px}
+.mapa-cab .uso{font-size:11px;color:var(--ink-3);margin-left:auto;white-space:nowrap}
+.mapa-min{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-2)}
+.mapa-min input{width:62px;padding:3px 6px;font-size:12px;text-align:right}
+/* a barra de saldo vive em .stock .bar; o mapa não é .stock, então sem isto
+   ela ficava com altura zero — presente no HTML e invisível na tela */
+.mapa-mat .bar{height:5px;border-radius:3px;background:var(--surface-2);
+  overflow:hidden}
+.mapa-mat .bar i{display:block;height:100%;border-radius:3px;background:var(--ok)}
+.mapa-mat .bar i.warn{background:var(--warn)}
+.mapa-mat .bar i.crit{background:var(--crit)}
+.mapa-lotes{width:100%;border-collapse:collapse;margin-top:8px;font-size:12.5px}
+/* largura fixa na coluna do selo: sem ela, material sem lote destacado
+   encolhe a coluna e desalinha o cabeçalho das outras */
+.mapa-lotes th:first-child,.mapa-lotes td:first-child{width:96px}
+.mapa-lotes th{font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-3);text-align:left;font-weight:700;padding:3px 7px 3px 0}
+.mapa-lotes td{padding:6px 7px 6px 0;border-top:1px solid var(--line);vertical-align:middle}
+.mapa-lotes tr.primeiro td{background:var(--ok-soft)}
+.mapa-lotes tr.vencido td{background:var(--crit-soft)}
+.mapa-lotes .n{text-align:right;font-family:var(--f-mono);white-space:nowrap}
+.mapa-lotes select{padding:3px 6px;font-size:12px;max-width:150px}
+.selo-primeiro{display:inline-block;background:var(--ok);color:var(--ground);
+  font-size:9.5px;font-weight:800;letter-spacing:.05em;padding:2px 6px;border-radius:5px;
+  text-transform:uppercase;white-space:nowrap}
+.val-pill{display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;
+  font-weight:700;white-space:nowrap}
+.val-ok{background:var(--ok-soft);color:var(--ok)}
+.val-perto{background:var(--warn-soft);color:var(--warn)}
+.val-venc{background:var(--crit-soft);color:var(--crit)}
+.val-sem{background:var(--surface-2);color:var(--ink-3)}
+@media (max-width:620px){
+  .mapa-lotes th:nth-child(5),.mapa-lotes td:nth-child(5){display:none}
+}
 /* ---------- gráficos do painel ----------
    Paleta validada com o verificador de daltonismo (protan/deutan/tritan) sobre
    as duas superfícies do app. Entradas x saídas NÃO é verde x vermelho de
@@ -1399,6 +1440,12 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
       <div class="tiles" id="stockTiles"></div>
 
       <div id="validadeBox" hidden></div>
+
+      <!-- MAPA DO ESTOQUE: material, lote, validade, quantidade e LOCAL na
+           mesma linha. Fica ABERTO por padrão, ao contrário das listas
+           antigas: é a tela que o dentista abre no meio do procedimento
+           para achar a caixa. -->
+      <div id="mapaBox"></div>
 
       <div class="row" id="estoqueAcoes" hidden>
         <button class="btn primary" id="novaEntradaBtn">+ Entrada por nota fiscal</button>
@@ -1825,7 +1872,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v84 · 25/11/2026";
+const VERSAO = "v85 · 25/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2183,6 +2230,19 @@ const DB = {
   diaISO(d){ const z=n=>String(n).padStart(2,"0");
     return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate()); },
 
+  async carregarMapaEstoque(){
+    try{
+      const [mapa, locais] = await Promise.all([
+        DB.rest("GET","vw_estoque_mapa?select=material_id,material,categoria,unidade,"+
+          "codigo,minimo,saldo_material,situacao,usado_90d,vezes_90d,lote_id,codigo_lote,"+
+          "validade,saldo_lote,fornecedor,nf_numero,local_id,local,usar_primeiro,"+
+          "vencido,vence_em_breve,dias_para_vencer"),
+        DB.rest("GET","locais_estoque?select=id,nome,descricao,ordem,ativo&order=ordem,nome")
+      ]);
+      S.mapaEstoque = mapa; S.locais = locais;
+    }catch(e){ S.mapaEstoque = null; S.locais = []; }
+  },
+
   async recarregarEstoque(){
     const est = await DB.rest("GET","estoque?select=material_id,saldo");
     S.estoque = est.map(e=>({id:UID.matRev[e.material_id], qtd:Number(e.saldo)}))
@@ -2294,6 +2354,7 @@ const DB = {
     S.sugeridos = {};
     sugeridos.forEach(s=>{ const m=UID.matRev[s.material_id]; if(m) S.sugeridos[m]=s; });
     S.validade = alertas;
+    await DB.carregarMapaEstoque();
 
     S.custos = null;
     if(pode("custo")){
@@ -9385,6 +9446,273 @@ function renderMatNovo(){
 
 /* ---------- lista ---------- */
 let matAberto=null;
+
+/* ================= MAPA DO ESTOQUE =================
+   Pedido do Dr. Leonardo, via Luiz: "uma forma visual dos itens mais usados
+   pela clínica, tudo na tela: material, lote, validade vs quantidade
+   disponível e local ... um aviso destacando qual lote deve ser usado
+   primeiro com base na validade que expira mais próxima."
+
+   Por que TABELA e não cartão bonito: são cinco informações por lote que
+   precisam ser comparadas na vertical — validade com validade, quantidade com
+   quantidade. Cartão empilhado obriga a percorrer a tela inteira para comparar
+   dois lotes; linha alinhada responde de bater o olho, que foi o pedido.
+
+   Ordem: MAIS USADO PRIMEIRO. O que a clínica mais gasta é o que ela mais
+   precisa achar com pressa, e o que mais dói quando acaba.
+
+   PRIMEIRO A VENCER, PRIMEIRO A SAIR (FEFO). O lote destacado não é o mais
+   antigo de entrada, é o que vence antes — que é o que evita jogar material
+   fora. Lote sem validade fica por último: na dúvida gasta-se antes o que tem
+   prazo correndo. */
+
+let mapaFiltro = "";
+let mapaSoAlerta = false;
+
+function mapaAgrupado(){
+  const linhas = S.mapaEstoque || [];
+  const porMat = new Map();
+  linhas.forEach(x=>{
+    if(!porMat.has(x.material_id)) porMat.set(x.material_id, {
+      id:x.material_id, nome:x.material, categoria:x.categoria, unidade:x.unidade,
+      codigo:x.codigo, minimo:Number(x.minimo||0), saldo:Number(x.saldo_material||0),
+      situacao:x.situacao, usado:Number(x.usado_90d||0), vezes:Number(x.vezes_90d||0),
+      lotes:[]});
+    if(x.lote_id) porMat.get(x.material_id).lotes.push(x);
+  });
+  let mats = Array.from(porMat.values());
+  const busca = norm(mapaFiltro.trim());
+  if(busca) mats = mats.filter(m=>norm(m.nome).includes(busca)
+    || norm(m.categoria||"").includes(busca)
+    || m.lotes.some(l=>norm(l.codigo_lote||"").includes(busca)
+                    || norm(l.local||"").includes(busca)));
+  if(mapaSoAlerta) mats = mats.filter(m=>m.situacao!=="ok"
+    || m.lotes.some(l=>l.vencido || l.vence_em_breve));
+  /* mais usado primeiro; empate desempata por quem está pior de saldo */
+  mats.sort((a,b)=> b.usado - a.usado
+    || (a.minimo? a.saldo/a.minimo : 9e9) - (b.minimo? b.saldo/b.minimo : 9e9)
+    || a.nome.localeCompare(b.nome));
+  mats.forEach(m=>m.lotes.sort((a,b)=>{
+    if(!!b.usar_primeiro - !!a.usar_primeiro) return !!b.usar_primeiro - !!a.usar_primeiro;
+    return String(a.validade||"9999").localeCompare(String(b.validade||"9999"));
+  }));
+  return mats;
+}
+
+function pillValidade(l){
+  if(!l.validade) return '<span class="val-pill val-sem">sem validade</span>';
+  const d = Number(l.dias_para_vencer);
+  const cls = l.vencido ? "val-venc" : (d<=90 ? "val-perto" : "val-ok");
+  const txt = l.vencido ? "venceu "+fmtData(l.validade)
+            : fmtData(l.validade)+" · "+d+"d";
+  return '<span class="val-pill '+cls+'">'+txt+'</span>';
+}
+
+function htmlMapaEstoque(){
+  if(S.mapaEstoque === null)
+    return '<div class="stage"><b>O mapa do estoque ainda não está no banco.</b> '
+      + 'Rode <b>ATUALIZAR-MAPA-ESTOQUE.sql</b>: é ele que cria a visão '
+      + '<code>vw_estoque_mapa</code> e a tabela de locais.</div>';
+  const mats = mapaAgrupado();
+  const locais = (S.locais||[]).filter(x=>x.ativo!==false);
+  const editaLocal = pode("estoque");
+  const editaMin   = pode("estoque") || pode("atender");   // dentista define o mínimo
+
+  const vencidos = (S.mapaEstoque||[]).filter(x=>x.vencido).length;
+  const perto    = (S.mapaEstoque||[]).filter(x=>x.vence_em_breve && !x.vencido).length;
+
+  const cabeca = '<div class="sec-h"><h2>Mapa do estoque</h2>'
+    + '<span class="hint">mais usados primeiro · lote que vence antes sai antes</span></div>'
+    + '<div class="row" style="margin-bottom:9px">'
+    + '<input id="mapaBusca" placeholder="procurar material, lote ou local" '
+    + 'value="'+esc(mapaFiltro)+'" style="flex:1;min-width:170px;padding:9px 11px">'
+    + '<button class="minibtn" id="mapaAlerta"'
+    + (mapaSoAlerta?' style="border-color:var(--warn);font-weight:700"':"")
+    + '>Só o que precisa de atenção</button>'
+    + (editaLocal ? '<button class="minibtn" id="mapaLocais">Locais de guarda</button>' : "")
+    + '</div>'
+    + ((vencidos||perto) ? '<div class="aviso" style="margin-bottom:9px">'
+        + (vencidos ? '<b>'+vencidos+' lote(s) vencido(s)</b> ainda com saldo. ' : "")
+        + (perto ? perto+' lote(s) vencem nos próximos 90 dias. ' : "")
+        + 'Use sempre o lote marcado como <b>usar primeiro</b>.</div>' : "");
+
+  if(!mats.length) return cabeca + '<div class="empty">'
+    + ((mapaFiltro||mapaSoAlerta) ? 'Nada com esses filtros.'
+        : 'Nenhum material ativo no estoque ainda.')+'</div>';
+
+  const corpo = mats.map(m=>{
+    const pct = m.minimo>0 ? Math.min(100, Math.round(Math.max(m.saldo,0)/m.minimo*100)) : 100;
+    const cls = m.situacao==="sem_estoque"||m.situacao==="critico" ? "critico"
+              : m.situacao==="abaixo_minimo" ? "alerta" : "";
+    const lotes = m.lotes.length ? '<table class="mapa-lotes">'
+      + '<thead><tr><th></th><th>Lote</th><th>Validade</th>'
+      + '<th class="n">Qtd.</th><th>Local</th></tr></thead><tbody>'
+      + m.lotes.map(l=>'<tr class="'+(l.vencido?"vencido":l.usar_primeiro?"primeiro":"")+'">'
+          + '<td>'+(l.usar_primeiro && !l.vencido
+              ? '<span class="selo-primeiro">usar primeiro</span>' : "")+'</td>'
+          + '<td><span class="mono">'+esc(l.codigo_lote||"—")+'</span></td>'
+          + '<td>'+pillValidade(l)+'</td>'
+          + '<td class="n">'+fmtQtd(l.saldo_lote)+' '+esc(m.unidade||"")+'</td>'
+          + '<td>'+(editaLocal
+              ? '<select data-lote="'+l.lote_id+'">'
+                + '<option value="">— sem local —</option>'
+                + locais.map(lo=>'<option value="'+lo.id+'"'
+                    + (l.local_id===lo.id?" selected":"")+'>'+esc(lo.nome)+'</option>').join("")
+                + '</select>'
+              : esc(l.local||"—"))+'</td>'
+          + '</tr>').join("")
+      + '</tbody></table>'
+      : '<div class="hint" style="margin-top:7px">Nenhum lote com saldo. '
+        + 'A entrada por nota fiscal é que cria lote, validade e local.</div>';
+
+    /* Se TODO lote com saldo está vencido, nenhum recebe o selo — e aí a tela
+       precisa dizer o que fazer, senão fica só o vermelho sem instrução. */
+    const todosVencidos = m.lotes.length && m.lotes.every(l=>l.vencido);
+    const avisoVencido = todosVencidos
+      ? '<div class="aviso" style="margin-top:7px">Todo o saldo deste material '
+        + 'está <b>vencido</b>. Não há lote indicado para uso — separe para '
+        + 'descarte e reponha antes do próximo procedimento.</div>'
+      : "";
+
+    return '<div class="mapa-mat '+cls+'">'
+      + '<div class="mapa-cab"><b>'+esc(m.nome)+'</b>'
+      + (m.codigo?'<span class="mono" style="font-size:11px;color:var(--ink-3)">'
+          +esc(m.codigo)+'</span>':"")
+      + '<span class="uso">'+(m.usado>0
+          ? 'usou '+fmtQtd(m.usado)+' '+esc(m.unidade||"")+' em 90 dias'
+          : 'sem saída em 90 dias')+'</span></div>'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">'
+      + '<span class="mono" style="font-size:13px"><b>'+fmtQtd(m.saldo)+'</b> '
+      + esc(m.unidade||"")+'</span>'
+      + '<span class="mapa-min">mínimo '
+      + (editaMin ? '<input data-min="'+m.id+'" inputmode="decimal" value="'
+            + String(m.minimo).replace(".",",")+'">' : '<b>'+fmtQtd(m.minimo)+'</b>')
+      + '</span>'
+      + '<span class="pill '+(m.situacao==="ok"?"ok":m.situacao==="abaixo_minimo"?"warn":"crit")+'">'
+      + (m.situacao==="ok"?"ok":m.situacao==="abaixo_minimo"?"abaixo do mínimo"
+         :m.situacao==="critico"?"repor hoje":"sem estoque")+'</span>'
+      + '<div class="bar" style="flex:1;min-width:90px"><i class="'
+      + (m.situacao==="ok"?"":m.situacao==="abaixo_minimo"?"warn":"crit")
+      + '" style="width:'+pct+'%"></i></div>'
+      + '</div>'
+      + lotes + avisoVencido + '</div>';
+  }).join("");
+
+  return cabeca + corpo;
+}
+
+function renderMapaEstoque(){
+  const box = $("#mapaBox"); if(!box) return;
+  if(!pode("estoque") && !pode("lancaMaterial") && !pode("atender")){ box.innerHTML=""; return; }
+  box.innerHTML = htmlMapaEstoque();
+
+  const busca = $("#mapaBusca");
+  if(busca) busca.addEventListener("input", ()=>{
+    mapaFiltro = busca.value;
+    const pos = busca.selectionStart;
+    renderMapaEstoque();
+    const nb = $("#mapaBusca");
+    if(nb){ nb.focus(); try{ nb.setSelectionRange(pos,pos); }catch(e){} }
+  });
+  const al = $("#mapaAlerta");
+  if(al) al.addEventListener("click", ()=>{ mapaSoAlerta=!mapaSoAlerta; renderMapaEstoque(); });
+  const lo = $("#mapaLocais");
+  if(lo) lo.addEventListener("click", abrirLocais);
+
+  /* local do lote: grava na hora, sem botão salvar — é correção de prateleira,
+     não cadastro */
+  $$("#mapaBox [data-lote]").forEach(sel=>sel.addEventListener("change", async ()=>{
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("PATCH","lotes?id=eq."+sel.dataset.lote,
+        {local_id: sel.value || null});
+      await DB.carregarMapaEstoque();
+    }, "local do lote");
+    if(ok) toast(sel.value ? "Local atualizado." : "Local removido.");
+    renderMapaEstoque();
+  }));
+
+  /* mínimo: grava ao sair do campo, e só se mudou de verdade */
+  $$("#mapaBox [data-min]").forEach(inp=>{
+    const antes = inp.value;
+    inp.addEventListener("blur", async ()=>{
+      if(inp.value === antes) return;
+      const v = numBR(inp.value);
+      if(!(v>=0)){ toast("Mínimo inválido."); inp.value = antes; return; }
+      const ok = await naNuvem(async ()=>{
+        await DB.rest("POST","rpc/definir_minimo", {p_material:inp.dataset.min, p_minimo:v});
+        await DB.carregarMapaEstoque();
+      }, "estoque mínimo");
+      if(!ok){ inp.value = antes; return; }
+      toast("Mínimo atualizado para "+fmtQtd(v)+".");
+      renderMapaEstoque(); renderEstoque();
+    });
+    inp.addEventListener("keydown", e=>{ if(e.key==="Enter") inp.blur(); });
+  });
+}
+
+/* ---------- locais de guarda ---------- */
+let localEdit = null;
+function abrirLocais(){
+  localEdit = localEdit ? null : {nome:"", descricao:"", ativo:true};
+  renderLocais();
+}
+function renderLocais(){
+  const box = $("#mapaBox"); if(!box) return;
+  if(!localEdit){ renderMapaEstoque(); return; }
+  const lista = S.locais || [];
+  box.innerHTML = '<div class="card">'
+    + '<div class="sec-h" style="margin:0 0 8px"><h2 style="font-size:15px">'
+    + 'Locais de guarda</h2>'
+    + '<button class="minibtn" id="locVoltar" style="margin-left:auto">← Voltar ao mapa</button></div>'
+    + '<div class="stage">Onde a caixa está de verdade: <i>armário 2, gaveta B</i>, '
+    + '<i>geladeira</i>, <i>sala 1 — bancada</i>. Quem procura material no meio do '
+    + 'procedimento não tem tempo de abrir três portas.</div>'
+    + '<div class="list" style="margin-top:9px">'
+    + (lista.length ? lista.map(l=>'<div class="item"><div class="main"><b>'+esc(l.nome)+'</b>'
+        + (l.descricao?'<small>'+esc(l.descricao)+'</small>':"")+'</div>'
+        + '<div class="end">'+(l.ativo===false?'<span class="pill neutral">inativo</span>':"")
+        + '<button class="minibtn" data-locdel="'+l.id+'">Remover</button></div></div>').join("")
+      : '<div class="empty">Nenhum local cadastrado.</div>')
+    + '</div>'
+    + '<div class="grid2" style="margin-top:10px">'
+    + '<div class="field"><label for="locNome">Nome do local</label>'
+    + '<input id="locNome" placeholder="Armário 2 — gaveta B" value="'+esc(localEdit.nome)+'"></div>'
+    + '<div class="field"><label for="locDesc">Observação</label>'
+    + '<input id="locDesc" placeholder="opcional" value="'+esc(localEdit.descricao||"")+'"></div>'
+    + '</div>'
+    + '<button class="btn primary wide" id="locSalvar" style="margin-top:8px">'
+    + 'Adicionar local</button></div>';
+
+  $("#locVoltar").addEventListener("click", ()=>{ localEdit=null; renderMapaEstoque(); });
+  $("#locSalvar").addEventListener("click", async ()=>{
+    const nome = $("#locNome").value.trim();
+    if(!nome){ toast("Dê um nome ao local."); $("#locNome").focus(); return; }
+    if((S.locais||[]).some(l=>norm(l.nome)===norm(nome))){
+      toast("Já existe um local com esse nome."); return; }
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("POST","locais_estoque",
+        {clinica_id:DB.clinica, nome, descricao:$("#locDesc").value.trim()||null});
+      await DB.carregarMapaEstoque();
+    }, "local de guarda");
+    if(!ok) return;
+    localEdit = {nome:"", descricao:"", ativo:true};
+    renderLocais(); toast("Local cadastrado.");
+  });
+  $$("#mapaBox [data-locdel]").forEach(b=>b.addEventListener("click", async ()=>{
+    const l = (S.locais||[]).find(x=>x.id===b.dataset.locdel); if(!l) return;
+    const usando = (S.mapaEstoque||[]).filter(x=>x.local_id===l.id).length;
+    if(!confirm("Remover o local \""+l.nome+"\"?"
+      + (usando ? "\n\n"+usando+" lote(s) estão marcados nele e ficarão sem local."
+                : ""))) return;
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("DELETE","locais_estoque?id=eq."+l.id);
+      await DB.carregarMapaEstoque();
+    }, "remoção do local");
+    if(!ok) return;
+    renderLocais(); toast("Local removido.");
+  }));
+}
+
 function renderEstoque(){
   const abaixo=S.estoque.filter(e=>stockStatus(e).k!=="ok");
   const crit=S.estoque.filter(e=>stockStatus(e).k==="crit");
@@ -9412,7 +9740,7 @@ function renderEstoque(){
     ? `${S.estoque.length} itens · ${abaixo.length} abaixo do mínimo`
     : "nenhum item lançado";
   $("#estoqueAcoes").hidden = !pode("estoque");
-  renderValidade(); renderEntrada(); renderMatNovo();
+  renderValidade(); renderEntrada(); renderMatNovo(); renderMapaEstoque();
 
   const grupos={}; S.estoque.forEach(e=>{ const c=catById(e.id); if(c) (grupos[c.cat]=grupos[c.cat]||[]).push(e); });
   const list=$("#stockList"); list.innerHTML="";
@@ -16674,6 +17002,10 @@ window.MD = {
   conferirVersao, get versaoServidor(){ return versaoServidor; },
   enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
   htmlFilaExclusao, exclusoesPendentes, pedirExclusao, ligarFilaExclusao,
+  htmlMapaEstoque, mapaAgrupado, renderMapaEstoque, pillValidade, renderLocais,
+  get mapaFiltro(){ return mapaFiltro; }, set mapaFiltro(v){ mapaFiltro = v; },
+  get mapaSoAlerta(){ return mapaSoAlerta; }, set mapaSoAlerta(v){ mapaSoAlerta = v; },
+  get localEdit(){ return localEdit; }, set localEdit(v){ localEdit = v; },
   svgEntradasSaidas, svgDespesasBarras, svgDespesasPizza, dadosMesAMes,
   topCategorias, htmlGraficos, fmtCurto, get painel(){ return painel; },
   editarPaciente, abrirPaciente, renderPacientes,
