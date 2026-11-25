@@ -990,6 +990,27 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 /* rodapé do conteúdo: só no celular, onde a lateral não existe */
 
 
+
+/* ---------- balão dos gráficos ---------- */
+.graf-tip{position:fixed;z-index:60;pointer-events:none;max-width:290px;
+  background:var(--surface);color:var(--ink);border:1px solid var(--line-2);
+  border-radius:var(--r);box-shadow:var(--shadow);padding:10px 12px;font-size:12px;
+  line-height:1.45;opacity:0;transform:translateY(3px);transition:opacity .1s}
+.graf-tip.on{opacity:1;transform:none}
+.graf-tip h4{font-family:var(--f-display);font-size:12.5px;font-weight:700;margin:0 0 6px}
+.graf-tip hr{border:none;border-top:1px solid var(--line);margin:7px 0}
+.graf-tip .lin{display:flex;align-items:baseline;gap:7px;margin-top:3px}
+/* traço, não quadrado: a densidade do balão não comporta tinta de dado
+   fazendo trabalho de rótulo */
+.graf-tip .key{width:12px;height:2px;border-radius:2px;flex:none;align-self:center}
+.graf-tip .v{font-family:var(--f-mono);font-weight:700;white-space:nowrap}
+.graf-tip .r{color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
+.graf-tip .sub{color:var(--ink-3);font-size:11px;margin-top:2px}
+.graf-tip .tit{font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:700;margin-top:7px}
+.graf .marca{cursor:default}
+.graf .marca:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){ .graf-tip{transition:none} }
 /* ---------- mapa do estoque ---------- */
 .mapa-mat{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);
   padding:11px 12px;margin-bottom:9px}
@@ -1054,7 +1075,9 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
   --g-eixo:#463F2F; --g-tinta:#C5BEAD;
 }
 .graf{width:100%;height:auto;display:block;overflow:visible}
-.graf text{font-family:var(--f-body);fill:var(--g-tinta)}
+.graf text{font-family:var(--f-body);fill:var(--g-tinta);pointer-events:none}
+/* rótulo nunca intercepta o ponteiro: o total no meio da rosca ficava por
+   cima das fatias e engolia o passar do mouse justamente no miolo do gráfico */
 .graf .rot{font-size:9px}
 .graf .val{font-size:9px;font-weight:700}
 .graf .eixo{stroke:var(--g-eixo);stroke-width:1}
@@ -1880,7 +1903,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v86 · 25/11/2026";
+const VERSAO = "v87 · 25/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -12945,6 +12968,152 @@ function despesasPainel(){
    3. Todo valor aparece ESCRITO ao lado da marca. Cor nenhuma carrega sozinha
       a informação, e quem imprimir em preto e branco continua lendo. */
 
+
+/* ---------- balão dos gráficos ----------
+   "quando selecionar ou deixar ponteiro do mouse em cima, resumir quais as
+    despesas, detalhes das informações do gráfico de forma visual."
+
+   O título nativo do SVG dava uma linha de texto cinza do sistema operacional,
+   depois de um segundo de espera. Isto aqui é um balão desenhado, imediato, e
+   que mostra o que há POR TRÁS do número: a barra de novembro abre as maiores
+   saídas de novembro; a fatia do aluguel abre os lançamentos de aluguel.
+
+   Duas regras que o balão segue:
+   · O VALOR vem primeiro, em negrito; o nome vem depois, apagado. No gráfico a
+     pessoa já sabe o que está olhando — o que ela quer é o número.
+   · Nome de categoria vem do banco, e entra por textContent, nunca por
+     concatenação de HTML. */
+
+let grafDados = {};         /* chave da marca -> o que o balão mostra */
+
+function tipEl(){
+  let t = document.getElementById("grafTip");
+  if(!t){
+    t = document.createElement("div");
+    t.id = "grafTip"; t.className = "graf-tip"; t.setAttribute("role","status");
+    document.body.appendChild(t);
+  }
+  return t;
+}
+
+/* montagem por DOM, não por string: rótulo é dado de fora */
+function linhaTip(pai, valor, rotulo, cor){
+  const l = document.createElement("div"); l.className = "lin";
+  if(cor){ const k = document.createElement("span"); k.className = "key";
+           k.style.background = "var("+cor+")"; l.appendChild(k); }
+  const v = document.createElement("span"); v.className = "v";
+  v.textContent = valor; l.appendChild(v);
+  const r = document.createElement("span"); r.className = "r";
+  r.textContent = rotulo; l.appendChild(r);
+  pai.appendChild(l);
+  return l;
+}
+function tituloTip(pai, txt){
+  const d = document.createElement("div"); d.className = "tit";
+  d.textContent = txt; pai.appendChild(d);
+}
+
+function montarTip(chave){
+  const d = grafDados[chave]; if(!d) return null;
+  const box = document.createElement("div");
+  const h = document.createElement("h4"); h.textContent = d.titulo; box.appendChild(h);
+
+  if(d.tipo === "mes"){
+    linhaTip(box, fmtBRL(d.ent), "entradas", "--g-ent");
+    linhaTip(box, fmtBRL(d.sai), "saídas",  "--g-sai");
+    box.appendChild(document.createElement("hr"));
+    const saldo = cent(d.ent - d.sai);
+    const l = linhaTip(box, (saldo<0?"−":"")+fmtBRL(Math.abs(saldo)), "saldo do mês");
+    l.querySelector(".v").style.color = saldo<0 ? "var(--crit)" : "var(--ok)";
+    if(d.itens.length){
+      tituloTip(box, "maiores saídas do mês");
+      d.itens.slice(0,4).forEach(x=>linhaTip(box, fmtBRL(x.valor), x.rot));
+      if(d.itens.length>4){
+        const resto = cent(d.itens.slice(4).reduce((a,x)=>a+x.valor,0));
+        linhaTip(box, fmtBRL(resto), "+"+(d.itens.length-4)+" outras");
+      }
+    }else{
+      const p = document.createElement("div"); p.className="sub";
+      p.textContent = "Nenhuma despesa lançada neste mês."; box.appendChild(p);
+    }
+  }else{
+    const l = linhaTip(box, fmtBRL(d.total), d.pctTxt, d.cor);
+    l.querySelector(".r").style.color = "var(--ink-2)";
+    const sub = document.createElement("div"); sub.className = "sub";
+    sub.textContent = d.n + (d.n===1?" lançamento":" lançamentos")
+      + (d.aberto>0.005 ? " · " + fmtBRL(d.pago) + " pagas, "
+                          + fmtBRL(d.aberto) + " a pagar"
+                        : " · tudo pago");
+    box.appendChild(sub);
+    if(d.dobradas && d.dobradas.length){
+      tituloTip(box, "categorias reunidas");
+      const p = document.createElement("div"); p.className="sub";
+      p.textContent = d.dobradas.join(" · "); box.appendChild(p);
+    }
+    if(d.itens.length){
+      box.appendChild(document.createElement("hr"));
+      tituloTip(box, "lançamentos");
+      d.itens.slice(0,5).forEach(x=>{
+        const li = linhaTip(box, fmtBRL(x.valor), x.rot);
+        if(!x.paga) li.querySelector(".v").style.color = "var(--warn)";
+      });
+      if(d.itens.length>5){
+        const resto = cent(d.itens.slice(5).reduce((a,x)=>a+x.valor,0));
+        linhaTip(box, fmtBRL(resto), "+"+(d.itens.length-5)+" lançamentos");
+      }
+    }
+  }
+  return box;
+}
+
+function posicionarTip(t, x, y){
+  const m = 12, r = t.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if(left + r.width  > innerWidth  - m) left = x - r.width - 14;
+  if(left < m) left = m;
+  if(top  + r.height > innerHeight - m) top = y - r.height - 14;
+  if(top  < m) top = m;
+  t.style.left = left+"px"; t.style.top = top+"px";
+}
+
+function mostrarTip(chave, x, y){
+  const conteudo = montarTip(chave); if(!conteudo) return;
+  const t = tipEl();
+  t.replaceChildren(conteudo);
+  t.classList.add("on");
+  posicionarTip(t, x, y);
+}
+function esconderTip(){
+  const t = document.getElementById("grafTip");
+  if(t){ t.classList.remove("on"); }
+}
+
+function ligarTipGraficos(raiz){
+  if(!raiz) return;
+  const marcas = raiz.querySelectorAll("[data-tip]");
+  marcas.forEach(m=>{
+    m.setAttribute("tabindex","0");
+    m.addEventListener("pointerenter", e=>mostrarTip(m.dataset.tip, e.clientX, e.clientY));
+    m.addEventListener("pointermove",  e=>{
+      const t = document.getElementById("grafTip");
+      if(t && t.classList.contains("on")) posicionarTip(t, e.clientX, e.clientY);
+    });
+    m.addEventListener("pointerleave", esconderTip);
+    /* teclado recebe o mesmo conteúdo, ancorado na própria marca */
+    m.addEventListener("focus", ()=>{
+      const r = m.getBoundingClientRect();
+      mostrarTip(m.dataset.tip, r.left + r.width/2, r.top);
+    });
+    m.addEventListener("blur", esconderTip);
+  });
+  /* no celular não há ponteiro: toque mostra, toque fora esconde */
+  raiz.addEventListener("click", e=>{
+    const m = e.target.closest("[data-tip]");
+    if(m) mostrarTip(m.dataset.tip, e.clientX, e.clientY); else esconderTip();
+  });
+  addEventListener("scroll", esconderTip, {passive:true});
+}
+
 const PAL_GRAF = ["--g1","--g2","--g3","--g4","--g5","--g6"];
 
 function fmtCurto(v){
@@ -12994,9 +13163,13 @@ function svgEntradasSaidas(dados){
     const col = (v, dx, cor, nome)=>{
       const h = Math.max(v>0?2:0, alt - (y(v)-T));
       if(!h) return "";
-      /* canto arredondado só na ponta: a base fica colada no eixo */
-      return '<g class="marca"><title>'+escX(nomeMes(d.mes+"-01"))+' · '+nome+': '
-        + fmtBRL(v)+'</title>'
+      /* a área de toque cobre a coluna inteira, do eixo ao topo do gráfico:
+         ninguém acerta uma barra de 10px de largura e 6px de altura */
+      return '<g class="marca" data-tip="mes:'+d.mes+'" role="img" aria-label="'
+        + escX(nomeMes(d.mes+"-01")+" — entradas "+fmtBRL(d.ent)
+               +", saídas "+fmtBRL(d.sai))+'">'
+        + '<rect x="'+(x0+dx-1)+'" y="'+T+'" width="'+(bw+2)+'" height="'+alt
+        + '" fill="transparent"/>'
         + '<rect x="'+(x0+dx)+'" y="'+y(v)+'" width="'+bw+'" height="'+h
         + '" rx="3" fill="var('+cor+')"/></g>';
     };
@@ -13022,7 +13195,11 @@ function topCategorias(cats, n){
   const cabeça = ord.slice(0, n-1);
   const resto  = ord.slice(n-1);
   cabeça.push({rot:"Outras ("+resto.length+")", total:cent(resto.reduce((a,x)=>a+x.total,0)),
-               n:resto.reduce((a,x)=>a+x.n,0), outras:true});
+               n:resto.reduce((a,x)=>a+x.n,0),
+               pago:cent(resto.reduce((a,x)=>a+Number(x.pago||0),0)),
+               aberto:cent(resto.reduce((a,x)=>a+Number(x.aberto||0),0)),
+               itens:resto.flatMap(x=>x.itens||[]),
+               dobradas:resto.map(x=>x.rot), outras:true});
   return cabeça;
 }
 
@@ -13039,8 +13216,11 @@ function svgDespesasBarras(cats){
     const yb = i*linhaH + 6;
     const w = Math.max(2, (c.total/maior)*larg);
     const pct = (c.total/total*100);
-    return '<g class="marca"><title>'+escX(c.rot)+': '+fmtBRL(c.total)+' · '
-      + pct.toFixed(1).replace(".",",")+'% das despesas · '+c.n+' lançamento(s)</title>'
+    return '<g class="marca" data-tip="cat:'+i+'" role="img" aria-label="'
+      + escX(c.rot+" — "+fmtBRL(c.total)+", "+pct.toFixed(1).replace(".",",")
+             +" por cento das despesas, "+c.n+" lançamentos")+'">'
+      + '<rect x="0" y="'+yb+'" width="'+W+'" height="'+(linhaH-2)
+      + '" fill="transparent"/>'
       + '<text class="rot" x="'+(rotW-8)+'" y="'+(yb+13)+'" text-anchor="end">'
       + escX(c.rot.length>26 ? c.rot.slice(0,25)+"…" : c.rot)+'</text>'
       + '<rect x="'+rotW+'" y="'+(yb+3)+'" width="'+w+'" height="14" rx="4" '
@@ -13068,6 +13248,19 @@ function svgDespesasPizza(cats){
     const cor = c.outras ? "--g7" : PAL_GRAF[i % PAL_GRAF.length];
     const pt = (r,a)=>[(cx+r*Math.cos(a)).toFixed(2), (cy+r*Math.sin(a)).toFixed(2)];
     const grande = (a1-a0) > Math.PI ? 1 : 0;
+    /* ÁREA DE TOQUE MAIOR QUE A FATIA: a rosca tem 42px de anel, e fatia fina
+       vira alvo de agulha no celular. Esta cunha invisível vai de dentro do
+       furo até um pouco além da borda — sem engolir o total do meio, que fica
+       com pointer-events:none. */
+    const cunha = (r0, r1)=>{
+      const p0=(r,a)=>[(cx+r*Math.cos(a)).toFixed(2),(cy+r*Math.sin(a)).toFixed(2)];
+      return frac >= 0.9999
+        ? 'M '+cx+' '+(cy-r1)+' A '+r1+' '+r1+' 0 1 1 '+(cx-0.01)+' '+(cy-r1)+' Z'
+        : 'M '+p0(r0,a0).join(" ")+' L '+p0(r1,a0).join(" ")
+          +' A '+r1+' '+r1+' 0 '+grande+' 1 '+p0(r1,a1).join(" ")
+          +' L '+p0(r0,a1).join(" ")
+          +' A '+r0+' '+r0+' 0 '+grande+' 0 '+p0(r0,a0).join(" ")+' Z';
+    };
     /* fatia única: arco completo quebra em "move to" e some */
     const d = frac >= 0.9999
       ? 'M '+cx+' '+(cy-rr)+' A '+rr+' '+rr+' 0 1 1 '+(cx-0.01)+' '+(cy-rr)
@@ -13083,8 +13276,10 @@ function svgDespesasPizza(cats){
         + '" text-anchor="middle" style="fill:#fff">'
         + pct.toFixed(0)+'%</text>'
       : "";
-    return '<g class="marca"><title>'+escX(c.rot)+': '+fmtBRL(c.total)+' · '
-      + pct.toFixed(1).replace(".",",")+'%</title>'
+    return '<g class="marca" data-tip="cat:'+i+'" role="img" aria-label="'
+      + escX(c.rot+" — "+fmtBRL(c.total)+", "+pct.toFixed(1).replace(".",",")
+             +" por cento")+'">'
+      + '<path d="'+cunha(ri-14, rr+8)+'" fill="transparent"/>'
       + '<path d="'+d+'" fill="var('+cor+')" stroke="var(--surface)" stroke-width="2"/>'
       + rotulo + '</g>';
   }).join("");
@@ -13109,6 +13304,34 @@ function htmlGraficos(linhas, ds, cats){
   if(!painel) painel = painelInicial();
   const modo = painel.grafico || "barras";
   const dados = dadosMesAMes(linhas, ds);
+
+  /* o que cada marca abre no balão. Montado aqui, uma vez, porque é aqui que
+     ainda se tem as despesas na mão — a marca guarda só a chave. */
+  grafDados = {};
+  dados.forEach(d=>{
+    const doMes = (ds||[]).filter(x=>String(x.competencia||"").slice(0,7)===d.mes);
+    const porCat = {};
+    doMes.forEach(x=>{ const k=x.categoria||"—";
+      porCat[k] = (porCat[k]||0) + Number(x.valor||0); });
+    grafDados["mes:"+d.mes] = {tipo:"mes", titulo:nomeMes(d.mes+"-01"),
+      ent:cent(d.ent), sai:cent(d.sai),
+      itens:Object.entries(porCat).map(([rot,valor])=>({rot, valor:cent(valor)}))
+        .sort((a,b)=>b.valor-a.valor)};
+  });
+  const topo = topCategorias(cats, modo==="pizza" ? 6 : 8);
+  const somaCat = topo.reduce((a,x)=>a+x.total,0) || 1;
+  topo.forEach((c,i)=>{
+    grafDados["cat:"+i] = {tipo:"cat", titulo:c.rot, total:cent(c.total),
+      pctTxt:(c.total/somaCat*100).toFixed(1).replace(".",",")+"% das despesas",
+      n:c.n, pago:cent(c.pago||0), aberto:cent(c.aberto||0),
+      cor:c.outras ? "--g7" : (modo==="pizza" ? PAL_GRAF[i%PAL_GRAF.length] : "--g1"),
+      dobradas:c.dobradas||null,
+      itens:(c.itens||[]).slice()
+        .sort((a,b)=>Number(b.valor||0)-Number(a.valor||0))
+        .map(x=>({rot:(x.descricao||"—")
+                   + (x.competencia?" · "+nomeMes(x.competencia).replace(/ de \d+$/,""):""),
+                  valor:cent(x.valor), paga:!!x.paga}))};
+  });
   return '<div class="sec-h" style="margin-top:16px"><h2>De olho no mês</h2>'
     + '<span class="hint">o mesmo recorte dos filtros acima</span></div>'
     + '<div class="card">'
@@ -13148,9 +13371,10 @@ function htmlDespesasDoPainel(liquidoEntrada){
   ds.forEach(x=>{
     const k = x.categoria_id || x.categoria || "—";
     if(!porCat[k]) porCat[k] = {rot:x.categoria||"—", grupo:x.grupo, tipo:x.tipo,
-                                total:0, pago:0, aberto:0, n:0};
+                                total:0, pago:0, aberto:0, n:0, itens:[]};
     const g = porCat[k];
     g.total += Number(x.valor||0); g.n++;
+    g.itens.push(x);               /* o balão mostra o que há por trás do número */
     if(x.paga) g.pago += Number(x.valor||0); else g.aberto += Number(x.valor||0);
   });
   const cats = Object.values(porCat).map(g=>{
@@ -13300,6 +13524,7 @@ function htmlPainel(){
 }
 
 function ligarPainel(){
+  ligarTipGraficos($("#finPainel"));
   $$("#finPainel [data-graf]").forEach(b=>b.addEventListener("click", ()=>{
     painel.grafico = b.dataset.graf; renderFinanceiro();
   }));
@@ -17025,6 +17250,8 @@ window.MD = {
   enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
   htmlFilaExclusao, exclusoesPendentes, pedirExclusao, ligarFilaExclusao,
   htmlDespTabela, htmlDespLancamentos,
+  montarTip, ligarTipGraficos, mostrarTip, esconderTip,
+  get grafDados(){ return grafDados; },
   htmlMapaEstoque, mapaAgrupado, renderMapaEstoque, pillValidade, renderLocais,
   get mapaFiltro(){ return mapaFiltro; }, set mapaFiltro(v){ mapaFiltro = v; },
   get mapaSoAlerta(){ return mapaSoAlerta; }, set mapaSoAlerta(v){ mapaSoAlerta = v; },
