@@ -980,6 +980,43 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 .colb{display:flex;flex-direction:column;gap:16px;min-width:0}
 .navfoot{display:none}
 /* rodapé do conteúdo: só no celular, onde a lateral não existe */
+
+/* ---------- gráficos do painel ----------
+   Paleta validada com o verificador de daltonismo (protan/deutan/tritan) sobre
+   as duas superfícies do app. Entradas x saídas NÃO é verde x vermelho de
+   propósito: é o par que mais some para quem tem daltonismo vermelho-verde,
+   justamente o mais comum. Azul x laranja separa para todo mundo. */
+:root{
+  --g-ent:#257de0; --g-sai:#f47230;
+  --g1:#257de0; --g2:#f47230; --g3:#00b894;
+  --g4:#f2a600; --g5:#ee7fac; --g6:#008a17; --g7:#8A8676;
+  --g-eixo:#D2C9B8; --g-tinta:#4B5661;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --g-ent:#338ced; --g-sai:#e76624;
+  --g1:#338ced; --g2:#e76624; --g3:#00a888;
+  --g4:#d28e05; --g5:#e24d8b; --g6:#0aac23; --g7:#938C7C;
+  --g-eixo:#463F2F; --g-tinta:#C5BEAD;
+}}
+:root[data-theme="dark"]{
+  --g-ent:#338ced; --g-sai:#e76624;
+  --g1:#338ced; --g2:#e76624; --g3:#00a888;
+  --g4:#d28e05; --g5:#e24d8b; --g6:#0aac23; --g7:#938C7C;
+  --g-eixo:#463F2F; --g-tinta:#C5BEAD;
+}
+.graf{width:100%;height:auto;display:block;overflow:visible}
+.graf text{font-family:var(--f-body);fill:var(--g-tinta)}
+.graf .rot{font-size:9px}
+.graf .val{font-size:9px;font-weight:700}
+.graf .eixo{stroke:var(--g-eixo);stroke-width:1}
+.graf .marca{transition:opacity .12s}
+.graf:hover .marca{opacity:.45}
+.graf .marca:hover{opacity:1}
+.graf-leg{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px;
+  color:var(--ink-2)}
+.graf-leg span{display:inline-flex;align-items:center;gap:6px}
+.graf-leg i{width:11px;height:11px;border-radius:3px;display:inline-block}
+@media (prefers-reduced-motion: reduce){ .graf .marca{transition:none} }
 .faixa-versao{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   background:var(--warn-soft);color:var(--warn);border-bottom:1px solid var(--line);
   padding:9px 14px;font-size:13px;font-weight:600}
@@ -1788,7 +1825,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v82 · 25/11/2026";
+const VERSAO = "v84 · 25/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -2404,8 +2441,9 @@ const DB = {
        consultório que fatura 40 mil e gasta 38 aparecia como um
        consultório que fatura 40 mil. */
     S.despesas = null; S.catDespesa = null; S.despFixas = null; S.fluxoMes = null;
+    S.exclusoes = null;
     try{
-      const [dsp, cat, fix, fm] = await Promise.all([
+      const [dsp, cat, fix, exc, fm] = await Promise.all([
         DB.rest("GET","vw_despesas?select=id,descricao,fornecedor,valor,competencia,"+
           "vencimento,pago_em,paga,atrasada,forma,conta_id,conta,categoria_id,categoria,"+
           "tipo,grupo,parceiro_id,parceiro,dentista_id,dentista,sala_id,sala,fixa_id,"+
@@ -2415,11 +2453,16 @@ const DB = {
         DB.rest("GET","despesas_fixas?select=id,categoria_id,descricao,fornecedor,parceiro_id,"+
           "valor_previsto,dia_vencimento,sala_id,dentista_id,inicio,fim,ativa,observacao"+
           "&order=descricao"),
+        DB.rest("GET","vw_exclusoes?select=id,tabela,escopo,registro_id,resumo,valor,"+
+          "n_linhas,motivo,estado,solicitado_em,decidido_em,observacao,linhas_apagadas,"+
+          "solicitado_por,solicitante,decisor&order=solicitado_em.desc&limit=200")
+          .catch(()=>null),
         DB.rest("GET","vw_fluxo_mes?select=mes,entradas,entradas_recebidas,entradas_previstas,"+
           "taxas,saidas,saidas_pagas,saidas_previstas,saidas_fixas,saidas_variaveis,"+
           "saldo,saldo_realizado,n_entradas,n_saidas,atrasados&order=mes")
       ]);
       S.despesas = dsp; S.catDespesa = cat; S.despFixas = fix; S.fluxoMes = fm;
+      S.exclusoes = exc;
     }catch(e){ /* sem a atualização de despesas no banco, a tela diz isso */ }
 
     /* contas de recebimento: SÓ o apelido vem por aqui. Banco, agência,
@@ -11554,6 +11597,133 @@ function htmlDespesas(){
   return topo + htmlDespLancamentos();
 }
 
+
+/* ================= EXCLUSÃO COM APROVAÇÃO =================
+   Pedido do Luiz: "independente de quem seja, ela só pode ser feita mediante
+   aprovação de 1 perfil ... o financeiro não pode ele próprio aprovar."
+
+   Como funciona, e por que assim:
+
+   · Ninguém apaga. A tela PEDE, e o pedido fica numa fila visível.
+   · Quem pede não decide — nem o administrador. Se o próprio dono pudesse
+     pedir e aprovar sozinho, o controle seria enfeite.
+   · Quem decide é administrador ou dentista-proprietário.
+   · O banco é que garante tudo isso, não esta tela: as regras estão dentro de
+     decidir_exclusao(), que é SECURITY DEFINER, e a política de DELETE direto
+     foi retirada da tabela. Esconder botão não é controle de acesso.
+   · Aprovar APAGA e ENCERRA o pedido na mesma transação. Ou as duas coisas
+     valem, ou nenhuma vale — foi o ponto que o Luiz fez questão de reforçar:
+     nada pode continuar pendente depois de aprovado. */
+
+const exclusoesPendentes = () =>
+  (S.exclusoes||[]).filter(x=>x.estado==="pendente");
+
+function minhaSolicitacao(x){ return x.solicitado_por === DB.meuId; }
+
+function htmlFilaExclusao(){
+  if(S.exclusoes === null) return "";
+  const pend = exclusoesPendentes();
+  const decididas = (S.exclusoes||[]).filter(x=>x.estado!=="pendente").slice(0,5);
+  const souDecisor = pode("admin");
+  if(!pend.length && !decididas.length) return "";
+
+  const linha = x=>{
+    const meu = minhaSolicitacao(x);
+    return '<div class="item"><div class="main">'
+      + '<b>'+esc(x.resumo)+'</b>'
+      + '<small>'+fmtBRL(x.valor)
+      + (x.n_linhas>1 ? ' · '+x.n_linhas+' lançamentos' : "")
+      + ' · pedido por '+esc(x.solicitante||"—")
+      + ' em '+fmtData(String(x.solicitado_em).slice(0,10))+'</small>'
+      + (x.motivo ? '<small style="color:var(--ink-3)">motivo: '+esc(x.motivo)+'</small>' : "")
+      + '</div><div class="end">'
+      + (souDecisor && !meu
+          ? '<button class="minibtn" data-excok="'+x.id+'" '
+            + 'style="color:var(--crit)">Aprovar exclusão</button>'
+            + '<button class="minibtn" data-excnao="'+x.id+'">Recusar</button>'
+          : meu
+            ? '<span class="pill warn">aguardando outra pessoa</span>'
+              + '<button class="minibtn" data-exccancel="'+x.id+'">Desistir</button>'
+            : '<span class="pill warn">aguardando aprovação</span>')
+      + '</div></div>';
+  };
+
+  return (pend.length ? '<div class="card" style="margin-bottom:10px;'
+      + 'border-color:var(--warn)">'
+    + '<div class="sec-h" style="margin:0 0 8px"><h2 style="font-size:14px">'
+    + 'Exclusões aguardando aprovação</h2>'
+    + '<span class="pill warn">'+pend.length+'</span></div>'
+    + '<div class="list">'+pend.map(linha).join("")+'</div>'
+    + (souDecisor ? '<div class="stage" style="margin-top:8px">Aprovar apaga o '
+        + 'lançamento na hora e encerra o pedido. <b>Quem pediu não aprova</b> — '
+        + 'nem você, se o pedido for seu.</div>' : "")
+    + '</div>' : "")
+  + (decididas.length ? '<details style="margin-bottom:10px"><summary '
+      + 'style="cursor:pointer;font-size:12.5px;color:var(--ink-3)">'
+      + 'Últimas exclusões decididas</summary><div class="list" style="margin-top:8px">'
+    + decididas.map(x=>'<div class="item"><div class="main">'
+        + '<b>'+esc(x.resumo)+'</b><small>'+fmtBRL(x.valor)+' · '
+        + (x.estado==="aprovada" ? "apagado" : x.estado)
+        + ' · pediu '+esc(x.solicitante||"—")
+        + (x.decisor ? ' · decidiu '+esc(x.decisor) : "")
+        + (x.decidido_em ? ' em '+fmtData(String(x.decidido_em).slice(0,10)) : "")
+        + '</small></div><div class="end"><span class="pill '
+        + (x.estado==="aprovada"?"crit":"neutral")+'">'+x.estado+'</span></div></div>').join("")
+    + '</div></details>' : "");
+}
+
+async function pedirExclusao(escopo, id, oQue){
+  const motivo = prompt("Por que este lançamento deve ser excluído?\n\n"
+    + oQue + "\n\nO pedido vai para aprovação de um administrador ou do "
+    + "dentista-proprietário. Você não pode aprovar o seu próprio pedido.");
+  if(motivo === null) return;          // desistiu no prompt
+  const ok = await naNuvem(async ()=>{
+    await DB.rest("POST","rpc/solicitar_exclusao_despesa",
+      {p_id:id, p_escopo:escopo, p_motivo:motivo||null});
+    await DB.carregarCaixa();
+  }, "pedido de exclusão");
+  if(!ok) return;
+  despForm = null; renderFinanceiro();
+  toast("Pedido enviado. Um administrador precisa aprovar para apagar.");
+}
+
+function ligarFilaExclusao(){
+  $$("#finPainel [data-excok]").forEach(b=>b.addEventListener("click", async ()=>{
+    const x = (S.exclusoes||[]).find(e=>e.id===b.dataset.excok); if(!x) return;
+    if(!confirm("Aprovar a exclusão de \""+x.resumo+"\" ("+fmtBRL(x.valor)+")?\n\n"
+      + (x.n_linhas>1 ? x.n_linhas+" lançamentos serão apagados.\n\n" : "")
+      + "Pedido por "+(x.solicitante||"—")+".\nNão dá para desfazer.")) return;
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("POST","rpc/decidir_exclusao", {p_solicitacao:x.id, p_aprovar:true});
+      await DB.carregarCaixa();
+    }, "aprovação da exclusão");
+    if(!ok) return;
+    renderFinanceiro(); toast("Excluído e pedido encerrado.");
+  }));
+
+  $$("#finPainel [data-excnao]").forEach(b=>b.addEventListener("click", async ()=>{
+    const x = (S.exclusoes||[]).find(e=>e.id===b.dataset.excnao); if(!x) return;
+    const obs = prompt("Recusar a exclusão de \""+x.resumo+"\".\n\nPor quê? (opcional)");
+    if(obs === null) return;
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("POST","rpc/decidir_exclusao",
+        {p_solicitacao:x.id, p_aprovar:false, p_observacao:obs||null});
+      await DB.carregarCaixa();
+    }, "recusa da exclusão");
+    if(!ok) return;
+    renderFinanceiro(); toast("Pedido recusado. O lançamento continua lá.");
+  }));
+
+  $$("#finPainel [data-exccancel]").forEach(b=>b.addEventListener("click", async ()=>{
+    const ok = await naNuvem(async ()=>{
+      await DB.rest("POST","rpc/cancelar_exclusao", {p_solicitacao:b.dataset.exccancel});
+      await DB.carregarCaixa();
+    }, "retirada do pedido");
+    if(!ok) return;
+    renderFinanceiro(); toast("Pedido retirado.");
+  }));
+}
+
 function htmlDespLancamentos(){
   const lista = despesasFiltradas();
   const s = somaDespesas(lista);
@@ -11561,7 +11731,8 @@ function htmlDespLancamentos(){
     .map(x=>String(x.competencia||"").slice(0,7)+"-01").filter(x=>x!=="-01"))).sort().reverse();
   const d = despForm;
 
-  return '<div class="row" style="margin-bottom:8px">'
+  return htmlFilaExclusao()
+    + '<div class="row" style="margin-bottom:8px">'
     + '<button class="btn primary" id="dsNova">+ Lançar despesa</button>'
     + '<select id="dsMes" style="max-width:190px">'
     + '<option value="">todos os meses</option>'
@@ -11808,10 +11979,14 @@ function htmlDespForm(d){
        relatório para sempre. */
     + (nova ? "" : '<div class="rowbtns" style="margin-top:4px">'
         + '<button class="minibtn" id="dsExcluir" style="color:var(--crit)">'
-        + 'Excluir este lançamento</button>'
+        + 'Pedir exclusão deste lançamento</button>'
         + (d.parcela_de>1 ? '<button class="minibtn" id="dsExcluirSerie" '
-            + 'style="color:var(--crit)">Excluir as '+d.parcela_de+' parcelas</button>' : "")
-        + '</div>')
+            + 'style="color:var(--crit)">Pedir exclusão das '+d.parcela_de
+            + ' parcelas</button>' : "")
+        + '</div>'
+        + '<div class="stage">Exclusão passa por aprovação: o pedido vai para um '
+        + 'administrador ou para o dentista-proprietário, e <b>quem pede não '
+        + 'aprova</b>. Até lá o lançamento continua valendo no caixa.</div>')
     + '<div class="stage">Competência e pagamento são datas diferentes de propósito: a '
     + 'energia de março chega em abril e é custo de março. O relatório por competência '
     + 'mostra o custo do mês; o fluxo de caixa mostra quando o dinheiro sai.</div>'
@@ -11927,6 +12102,7 @@ function htmlDespCategorias(){
 }
 
 function ligarDespesas(){
+  ligarFilaExclusao();
   $$("#finPainel [data-desp]").forEach(b=>b.addEventListener("click", ()=>{
     despAba = b.dataset.desp; despForm=null; fixaForm=null; catForm=null;
     renderFinanceiro();
@@ -11965,36 +12141,20 @@ function ligarDespesas(){
   }));
 
   const dex = $("#dsExcluir");
-  if(dex) dex.addEventListener("click", async ()=>{
+  if(dex) dex.addEventListener("click", ()=>{
     const d = despForm; if(!d || !d.id) return;
-    if(!confirm("Excluir \""+d.descricao+"\" de "+fmtBRL(d.valor)+"?\n\n"
-      + "O lançamento some do fluxo de caixa e dos relatórios. Não dá para desfazer."))
-      return;
-    const ok = await naNuvem(async ()=>{
-      await DB.rest("DELETE","despesas?id=eq."+d.id);
-      await DB.carregarCaixa();
-    }, "exclusão da despesa");
-    if(!ok) return;
-    despForm = null; renderFinanceiro(); toast("Lançamento excluído.");
+    pedirExclusao("linha", d.id, esc(d.descricao)+" — "+fmtBRL(d.valor));
   });
 
   const dexs = $("#dsExcluirSerie");
-  if(dexs) dexs.addEventListener("click", async ()=>{
+  if(dexs) dexs.addEventListener("click", ()=>{
     const d = despForm; if(!d || !d.parcela_grupo) return;
     const irmas = (S.despesas||[]).filter(x=>x.parcela_grupo===d.parcela_grupo);
     const soma = cent(irmas.reduce((a,x)=>a+Number(x.valor||0),0));
     const pagas = irmas.filter(x=>x.paga).length;
-    if(!confirm("Excluir as "+irmas.length+" parcelas desta compra ("
-      + fmtBRL(soma)+" no total)?"
-      + (pagas ? "\n\nATENÇÃO: "+pagas+" parcela(s) já constam como pagas." : "")
-      + "\n\nNão dá para desfazer.")) return;
-    const ok = await naNuvem(async ()=>{
-      await DB.rest("DELETE","despesas?parcela_grupo=eq."+d.parcela_grupo);
-      await DB.carregarCaixa();
-    }, "exclusão das parcelas");
-    if(!ok) return;
-    despForm = null; renderFinanceiro();
-    toast(irmas.length+" parcelas excluídas.");
+    pedirExclusao("serie", d.parcela_grupo,
+      irmas.length+" parcelas — "+fmtBRL(soma)
+      + (pagas ? " ("+pagas+" já consta(m) como paga(s))" : ""));
   });
 
   ["dsParcelas","dsParcComp","dsValor","dsComp","dsVenc"].forEach(id=>{
@@ -12273,7 +12433,8 @@ function painelInicial(){
   const h = new Date();
   const de  = new Date(h.getFullYear(), h.getMonth(), 1);
   const ate = new Date(h.getFullYear(), h.getMonth()+3, 0);
-  return {de:ISO(de), ate:ISO(ate), dent:"", sala:"", forma:"", conta:"", base:"previsao"};
+  return {de:ISO(de), ate:ISO(ate), dent:"", sala:"", forma:"", conta:"",
+          base:"previsao", grafico:"barras"};
 }
 
 function linhasPainel(){
@@ -12408,6 +12569,221 @@ function despesasPainel(){
   });
 }
 
+
+/* ================= GRÁFICOS DO PAINEL =================
+   Pedido do Dr. Leonardo, via Luiz: "os dentistas em geral não sabem mexer em
+   planilhas complexas ... o que mais importa é saber quais as maiores despesas
+   da clínica e seus ganhos, batendo o olho".
+
+   Desenhado em SVG na mão, sem biblioteca: o app é um arquivo só, servido como
+   página estática, e uma dependência externa aqui significaria o painel em
+   branco no dia em que o CDN cair.
+
+   Três decisões que valem explicação:
+
+   1. "MAIORES DESPESAS" é uma pergunta de RANQUEAMENTO, e barra responde melhor
+      que pizza: ninguém compara duas fatias de 18% e 21% a olho, mas compara
+      duas barras na mesma linha de base. Por isso a barra é o padrão. A pizza
+      fica no botão ao lado, porque foi pedida e porque dá a noção de "quanto do
+      bolo" que a barra não dá.
+
+   2. ENTRADAS x SAÍDAS NÃO É VERDE x VERMELHO. É o par que mais some para quem
+      tem daltonismo vermelho-verde — o mais comum — e um painel financeiro
+      ilegível para o dono é pior do que um painel feio. Azul x laranja separa
+      para todos os tipos; conferido no verificador.
+
+   3. Todo valor aparece ESCRITO ao lado da marca. Cor nenhuma carrega sozinha
+      a informação, e quem imprimir em preto e branco continua lendo. */
+
+const PAL_GRAF = ["--g1","--g2","--g3","--g4","--g5","--g6"];
+
+function fmtCurto(v){
+  const n = Math.abs(Number(v)||0);
+  if(n >= 1000000) return "R$ "+(n/1000000).toLocaleString("pt-BR",{maximumFractionDigits:1})+" mi";
+  if(n >= 1000)    return "R$ "+(n/1000).toLocaleString("pt-BR",{maximumFractionDigits:1})+" mil";
+  return fmtBRL(v);
+}
+const escX = t => String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+  .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+
+/* ---------- entradas x saídas, mês a mês ---------- */
+function dadosMesAMes(linhas, ds){
+  if(!painel) painel = painelInicial();   /* chamado antes do painel existir */
+  const campo = painel.base==="pagamento" ? "pago_em" : "previsao_credito";
+  const m = {};
+  const põe = (mes, chave, v)=>{
+    if(!mes) return;
+    m[mes] = m[mes] || {mes, ent:0, sai:0};
+    m[mes][chave] += Number(v||0);
+  };
+  (linhas||[]).forEach(x=>põe(String(x[campo]||"").slice(0,7), "ent", x.valor_liquido));
+  (ds||[]).forEach(x=>põe(String(x.competencia||"").slice(0,7), "sai", x.valor));
+  return Object.values(m).sort((a,b)=>a.mes.localeCompare(b.mes)).slice(-12);
+}
+
+function svgEntradasSaidas(dados){
+  if(!dados.length) return '<div class="empty">Sem movimento no período.</div>';
+  const L=38, R=8, T=14, B=26, W=420, H=200;
+  const larg = W-L-R, alt = H-T-B;
+  const topo = Math.max(1, ...dados.map(d=>Math.max(d.ent, d.sai)));
+  const passo = larg/dados.length;
+  const bw = Math.max(4, Math.min(16, passo/2 - 3));
+  const y = v => T + alt - (v/topo)*alt;
+
+  /* três linhas de grade e nada mais: grade é contexto, não desenho */
+  const grade = [0, .5, 1].map(f=>{
+    const gy = T + alt - f*alt;
+    return '<line class="eixo" x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'"'
+      + (f?' stroke-dasharray="2 3"':"")+'/>'
+      + '<text class="rot" x="'+(L-5)+'" y="'+(gy+3)+'" text-anchor="end">'
+      + (f ? fmtCurto(topo*f).replace("R$ ","") : "0")+'</text>';
+  }).join("");
+
+  const barras = dados.map((d,i)=>{
+    const x0 = L + i*passo + (passo - bw*2 - 2)/2;
+    const col = (v, dx, cor, nome)=>{
+      const h = Math.max(v>0?2:0, alt - (y(v)-T));
+      if(!h) return "";
+      /* canto arredondado só na ponta: a base fica colada no eixo */
+      return '<g class="marca"><title>'+escX(nomeMes(d.mes+"-01"))+' · '+nome+': '
+        + fmtBRL(v)+'</title>'
+        + '<rect x="'+(x0+dx)+'" y="'+y(v)+'" width="'+bw+'" height="'+h
+        + '" rx="3" fill="var('+cor+')"/></g>';
+    };
+    return col(d.ent, 0, "--g-ent", "entradas")
+         + col(d.sai, bw+2, "--g-sai", "saídas")
+         + '<text class="rot" x="'+(L+i*passo+passo/2)+'" y="'+(H-B+13)
+         + '" text-anchor="middle">'+escX(nomeMes(d.mes+"-01").slice(0,3))+'</text>';
+  }).join("");
+
+  return '<svg class="graf" viewBox="0 0 '+W+' '+H+'" role="img" '
+    + 'aria-label="Entradas e saídas por mês">'
+    + grade + barras
+    + '<line class="eixo" x1="'+L+'" y1="'+(T+alt)+'" x2="'+(W-R)+'" y2="'+(T+alt)+'"/>'
+    + '</svg>'
+    + '<div class="graf-leg"><span><i style="background:var(--g-ent)"></i>entradas</span>'
+    + '<span><i style="background:var(--g-sai)"></i>saídas</span></div>';
+}
+
+/* ---------- maiores despesas: barras ranqueadas ---------- */
+function topCategorias(cats, n){
+  const ord = cats.slice().sort((a,b)=>b.total-a.total);
+  if(ord.length <= n) return ord;
+  const cabeça = ord.slice(0, n-1);
+  const resto  = ord.slice(n-1);
+  cabeça.push({rot:"Outras ("+resto.length+")", total:cent(resto.reduce((a,x)=>a+x.total,0)),
+               n:resto.reduce((a,x)=>a+x.n,0), outras:true});
+  return cabeça;
+}
+
+function svgDespesasBarras(cats){
+  const top = topCategorias(cats, 8);
+  if(!top.length) return '<div class="empty">Nenhuma despesa no período.</div>';
+  const total = top.reduce((a,x)=>a+x.total, 0) || 1;
+  const maior = Math.max(...top.map(x=>x.total)) || 1;
+  const linhaH = 30, W = 420, rotW = 150, valW = 74;
+  const H = top.length*linhaH + 6;
+  const larg = W - rotW - valW;
+
+  const linhas = top.map((c,i)=>{
+    const yb = i*linhaH + 6;
+    const w = Math.max(2, (c.total/maior)*larg);
+    const pct = (c.total/total*100);
+    return '<g class="marca"><title>'+escX(c.rot)+': '+fmtBRL(c.total)+' · '
+      + pct.toFixed(1).replace(".",",")+'% das despesas · '+c.n+' lançamento(s)</title>'
+      + '<text class="rot" x="'+(rotW-8)+'" y="'+(yb+13)+'" text-anchor="end">'
+      + escX(c.rot.length>26 ? c.rot.slice(0,25)+"…" : c.rot)+'</text>'
+      + '<rect x="'+rotW+'" y="'+(yb+3)+'" width="'+w+'" height="14" rx="4" '
+      + 'fill="var('+(c.outras?"--g7":"--g1")+')"/>'
+      + '<text class="val" x="'+(rotW+w+6)+'" y="'+(yb+14)+'">'+fmtBRL(c.total)
+      + '</text></g>';
+  }).join("");
+
+  return '<svg class="graf" viewBox="0 0 '+W+' '+H+'" role="img" '
+    + 'aria-label="Maiores despesas por categoria">'+linhas+'</svg>';
+}
+
+/* ---------- maiores despesas: pizza ---------- */
+function svgDespesasPizza(cats){
+  const top = topCategorias(cats, 6);
+  if(!top.length) return '<div class="empty">Nenhuma despesa no período.</div>';
+  const total = top.reduce((a,x)=>a+x.total, 0);
+  if(!(total>0)) return '<div class="empty">Nenhuma despesa no período.</div>';
+  const cx=105, cy=105, rr=92, ri=50, W=420, H=212;
+
+  let ang = -Math.PI/2;
+  const fatias = top.map((c,i)=>{
+    const frac = c.total/total;
+    const a0 = ang, a1 = ang + frac*Math.PI*2; ang = a1;
+    const cor = c.outras ? "--g7" : PAL_GRAF[i % PAL_GRAF.length];
+    const pt = (r,a)=>[(cx+r*Math.cos(a)).toFixed(2), (cy+r*Math.sin(a)).toFixed(2)];
+    const grande = (a1-a0) > Math.PI ? 1 : 0;
+    /* fatia única: arco completo quebra em "move to" e some */
+    const d = frac >= 0.9999
+      ? 'M '+cx+' '+(cy-rr)+' A '+rr+' '+rr+' 0 1 1 '+(cx-0.01)+' '+(cy-rr)
+        +' M '+cx+' '+(cy-ri)+' A '+ri+' '+ri+' 0 1 0 '+(cx-0.01)+' '+(cy-ri)+' Z'
+      : 'M '+pt(ri,a0).join(" ")+' L '+pt(rr,a0).join(" ")
+        +' A '+rr+' '+rr+' 0 '+grande+' 1 '+pt(rr,a1).join(" ")
+        +' L '+pt(ri,a1).join(" ")
+        +' A '+ri+' '+ri+' 0 '+grande+' 0 '+pt(ri,a0).join(" ")+' Z';
+    const pct = frac*100;
+    const meio = (a0+a1)/2, rm = (rr+ri)/2;
+    const rotulo = pct >= 7
+      ? '<text class="val" x="'+(cx+rm*Math.cos(meio))+'" y="'+(cy+rm*Math.sin(meio)+3)
+        + '" text-anchor="middle" style="fill:#fff">'
+        + pct.toFixed(0)+'%</text>'
+      : "";
+    return '<g class="marca"><title>'+escX(c.rot)+': '+fmtBRL(c.total)+' · '
+      + pct.toFixed(1).replace(".",",")+'%</title>'
+      + '<path d="'+d+'" fill="var('+cor+')" stroke="var(--surface)" stroke-width="2"/>'
+      + rotulo + '</g>';
+  }).join("");
+
+  const legenda = top.map((c,i)=>{
+    const cor = c.outras ? "--g7" : PAL_GRAF[i % PAL_GRAF.length];
+    return '<span><i style="background:var('+cor+')"></i>'+escX(c.rot)
+      + ' · <b>'+fmtBRL(c.total)+'</b></span>';
+  }).join("");
+
+  return '<svg class="graf" viewBox="0 0 '+W+' '+H+'" role="img" '
+    + 'aria-label="Repartição das despesas por categoria">'
+    + fatias
+    + '<text class="rot" x="'+cx+'" y="'+(cy-4)+'" text-anchor="middle">total</text>'
+    + '<text class="val" x="'+cx+'" y="'+(cy+11)+'" text-anchor="middle" '
+    + 'style="font-size:13px">'+fmtCurto(total)+'</text>'
+    + '</svg>'
+    + '<div class="graf-leg">'+legenda+'</div>';
+}
+
+function htmlGraficos(linhas, ds, cats){
+  if(!painel) painel = painelInicial();
+  const modo = painel.grafico || "barras";
+  const dados = dadosMesAMes(linhas, ds);
+  return '<div class="sec-h" style="margin-top:16px"><h2>De olho no mês</h2>'
+    + '<span class="hint">o mesmo recorte dos filtros acima</span></div>'
+    + '<div class="card">'
+    + '<div class="eyebrow">Entradas e saídas, mês a mês</div>'
+    + '<div style="margin-top:10px">' + svgEntradasSaidas(dados) + '</div>'
+    + '</div>'
+    + '<div class="card" style="margin-top:10px">'
+    + '<div class="sec-h" style="margin:0 0 4px"><h2 style="font-size:14px">'
+    + 'Maiores despesas</h2>'
+    + '<div class="rowbtns" style="margin-left:auto">'
+    + '<button class="minibtn" data-graf="barras"'
+    + (modo==="barras"?' style="border-color:var(--accent);font-weight:700"':"")
+    + '>Barras</button>'
+    + '<button class="minibtn" data-graf="pizza"'
+    + (modo==="pizza"?' style="border-color:var(--accent);font-weight:700"':"")
+    + '>Pizza</button></div></div>'
+    + '<div style="margin-top:10px">'
+    + (modo==="pizza" ? svgDespesasPizza(cats) : svgDespesasBarras(cats))
+    + '</div>'
+    + '<div class="stage" style="margin-top:10px">Barras respondem <b>qual é a '
+    + 'maior</b>; pizza responde <b>quanto do bolo</b>. Os números ao lado valem '
+    + 'para os dois — nenhuma informação depende só da cor.</div>'
+    + '</div>';
+}
+
 function htmlDespesasDoPainel(liquidoEntrada){
   if(S.despesas === null) return '<div class="stage" style="margin-top:12px">'
     + '<b>As despesas ainda não entram neste painel.</b> Rode '
@@ -12431,7 +12807,8 @@ function htmlDespesasDoPainel(liquidoEntrada){
     ["total","pago","aberto"].forEach(k=>g[k]=cent(g[k])); return g;
   }).sort((a,b)=>b.total-a.total);
 
-  return '<div class="sec-h" style="margin-top:16px"><h2>Saídas e saldo</h2>'
+  return htmlGraficos(linhasPainel(), ds, cats)
+    + '<div class="sec-h" style="margin-top:16px"><h2>Saídas e saldo</h2>'
     + '<span class="hint">despesas do mesmo recorte</span></div>'
     + '<div class="tiles">'
     + '<div class="tile"><b>'+fmtBRL(s.total)+'</b><span>despesas</span></div>'
@@ -12573,6 +12950,9 @@ function htmlPainel(){
 }
 
 function ligarPainel(){
+  $$("#finPainel [data-graf]").forEach(b=>b.addEventListener("click", ()=>{
+    painel.grafico = b.dataset.graf; renderFinanceiro();
+  }));
   const mudar = (id, campo)=>{ const el=$("#"+id); if(el)
     el.addEventListener("change", ()=>{ painel[campo]=el.value; renderFinanceiro(); }); };
   mudar("pnDe","de"); mudar("pnAte","ate"); mudar("pnBase","base");
@@ -16293,6 +16673,9 @@ function ligarFaixaVersao(){
 window.MD = {
   conferirVersao, get versaoServidor(){ return versaoServidor; },
   enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
+  htmlFilaExclusao, exclusoesPendentes, pedirExclusao, ligarFilaExclusao,
+  svgEntradasSaidas, svgDespesasBarras, svgDespesasPizza, dadosMesAMes,
+  topCategorias, htmlGraficos, fmtCurto, get painel(){ return painel; },
   editarPaciente, abrirPaciente, renderPacientes,
   get estado(){ return S; },
   /* o acesso fica acessível ao teste: distinguir "banco fora do ar" de
