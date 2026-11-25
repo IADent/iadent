@@ -808,6 +808,14 @@ input.travado{background:var(--surface-2);color:var(--ink-3);cursor:default}
 .linha-forma select{min-width:132px}
 .linha-forma input{width:52px;text-align:center}
 .tab-rel{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+/* DESPESAS: cada grupo (Consumo, Ocupação, Pessoal, Serviços) desenha a sua
+   própria tabela, e tabela automática mede a largura pelo conteúdo DELA. O
+   resultado era "Categoria" começando em quatro posições diferentes na mesma
+   tela. table-layout:fixed + colgroup fazem as quatro usarem a mesma régua. */
+.tab-desp{table-layout:fixed;min-width:640px}  /* abaixo disso .rolar rola,
+   em vez de espremer sete colunas no celular até virar sopa de letras */
+.tab-desp td,.tab-desp th{overflow-wrap:anywhere}
+.tab-desp .acoes{text-align:right;white-space:nowrap}
 .tab-rel th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.07em;
   color:var(--ink-3);font-weight:700;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 .tab-rel td{padding:7px 8px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
@@ -1872,7 +1880,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v85 · 25/11/2026";
+const VERSAO = "v86 · 25/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -12100,6 +12108,18 @@ function htmlDespLancamentos(){
           + (despMes?" em "+nomeMes(despMes):"")+'.</div>');
 }
 
+/* A MESMA RÉGUA PARA TODOS OS GRUPOS. Somando 100%, com a descrição levando
+   a maior fatia porque é a única coluna que de fato varia de tamanho. */
+const COLS_DESP = '<colgroup>'
+  + '<col style="width:25%">'   // despesa + fornecedor
+  + '<col style="width:19%">'   // categoria + tipo
+  + '<col style="width:11%">'   // competência
+  + '<col style="width:11%">'   // vencimento
+  + '<col style="width:11%">'   // valor
+  + '<col style="width:15%">'   // situação + conta
+  + '<col style="width:8%">'    // botões
+  + '</colgroup>';
+
 function htmlDespTabela(lista){
   const porGrupo = {};
   lista.forEach(x=>{ (porGrupo[x.grupo] = porGrupo[x.grupo] || []).push(x); });
@@ -12111,7 +12131,9 @@ function htmlDespTabela(lista){
     const soma = cent(itens.reduce((a,x)=>a+Number(x.valor||0),0));
     return '<div class="sec-h" style="margin-top:14px"><h2>'+(GRUPO_DESP[g]||g)+'</h2>'
       + '<span class="hint">'+fmtBRL(soma)+'</span></div>'
-      + '<div class="rolar"><table class="tab-rel"><thead><tr>'
+      + '<div class="rolar"><table class="tab-rel tab-desp">'
+      + COLS_DESP
+      + '<thead><tr>'
       + '<th>Despesa</th><th>Categoria</th><th>Competência</th><th>Vencimento</th>'
       + '<th class="n">Valor</th><th>Situação</th><th></th></tr></thead><tbody>'
       + itens.map(x=>'<tr>'
@@ -12130,7 +12152,7 @@ function htmlDespTabela(lista){
           + '<td><span class="pill '+(x.paga?"ok":x.atrasada?"crit":"neutral")+'">'
           + (x.paga?("paga "+fmtData(x.pago_em)):x.atrasada?"vencida":"a vencer")+'</span>'
           + (x.conta?'<br><small style="color:var(--ink-3)">'+esc(x.conta)+'</small>':"")+'</td>'
-          + '<td class="naoimprime">'
+          + '<td class="naoimprime acoes">'
           + (x.paga ? "" : '<button class="minibtn" data-dspagar="'+x.id+'">✓ pagar</button>')
           + '<button class="minibtn" data-dsedit="'+x.id+'">editar</button></td>'
           + '</tr>').join("")
@@ -17002,6 +17024,7 @@ window.MD = {
   conferirVersao, get versaoServidor(){ return versaoServidor; },
   enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
   htmlFilaExclusao, exclusoesPendentes, pedirExclusao, ligarFilaExclusao,
+  htmlDespTabela, htmlDespLancamentos,
   htmlMapaEstoque, mapaAgrupado, renderMapaEstoque, pillValidade, renderLocais,
   get mapaFiltro(){ return mapaFiltro; }, set mapaFiltro(v){ mapaFiltro = v; },
   get mapaSoAlerta(){ return mapaSoAlerta; }, set mapaSoAlerta(v){ mapaSoAlerta = v; },
