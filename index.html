@@ -1909,7 +1909,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v88 · 27/11/2026";
+const VERSAO = "v89 · 27/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1962,7 +1962,25 @@ const DB = {
      Agora: 401 renova o token uma vez e repete a chamada sozinho. Se a
      renovação também falhar, a sessão acabou de verdade e a mensagem
      diz isso em português, em vez de devolver o erro cru do banco. */
+  /* v89 — "não limite". O Supabase devolve no máximo 1.000 linhas por
+     consulta, sem avisar: o 1.001º recebimento simplesmente não existiria
+     na tela, e o fluxo do mês sairia menor do que é. Toda leitura (GET) sem
+     limit explícito agora vem em lotes de 1.000 até acabar. Quem pede
+     limit=1 continua recebendo 1. */
   async rest(metodo, caminho, corpo, prefer, jaTentou){
+    if(metodo !== "GET" || /[?&](limit|offset)=/.test(caminho) || /^rpc\//.test(caminho))
+      return await DB._rest1(metodo, caminho, corpo, prefer, jaTentou);
+    const PAG = 1000, sep = caminho.includes("?") ? "&" : "?";
+    let todos = [];
+    for(let off = 0; off < 500000; off += PAG){
+      const lote = await DB._rest1("GET", caminho+sep+"limit="+PAG+"&offset="+off, corpo, prefer, jaTentou);
+      if(!Array.isArray(lote)) return off ? todos : lote;
+      todos = todos.concat(lote);
+      if(lote.length < PAG) break;
+    }
+    return todos;
+  },
+  async _rest1(metodo, caminho, corpo, prefer, jaTentou){
     const h = {apikey:BACKEND.key, "Content-Type":"application/json"};
     if(DB.tok) h.Authorization = "Bearer "+DB.tok;
     if(prefer) h.Prefer = prefer;
@@ -2172,7 +2190,7 @@ const DB = {
       DB.rest("GET","vw_consentimento_vigente?select=paciente_id,grava_consulta,texto_versao,concedido_em")
         .catch(()=>[]),
       DB.rest("GET","atendimentos?select=id,paciente_id,procedimento,regiao,complexidade,duracao_min,realizado_em,"+
-        "atendimento_notas(nota),atendimento_materiais(material_id,quantidade)&order=realizado_em.desc&limit=400")
+        "atendimento_notas(nota),atendimento_materiais(material_id,quantidade)&order=realizado_em.desc")
     ]);
     DB.mapearMateriais(mats);
     DB.mapearKits(proc, kits);
@@ -2494,13 +2512,13 @@ const DB = {
     try{
       const [cob, pag] = await Promise.all([
         DB.rest("GET","cobrancas?select=id,paciente_id,atendimento_id,dentista_id,valor,"+
-          "vencimento,status,descricao,plano_descricao,emitida_em&order=emitida_em.desc&limit=400"),
+          "vencimento,status,descricao,plano_descricao,emitida_em&order=emitida_em.desc"),
         DB.rest("GET","pagamentos?select=id,cobranca_id,valor,forma_enum,parcelas,antecipado,"+
           "adquirente,bandeira,maquininha_id,conta_id,nsu,taxa,taxa_pct,liquido,pago_em,"+
-          "nota_fiscal,nota_numero,nota_emitida_em,observacao&order=pago_em.desc&limit=600")
+          "nota_fiscal,nota_numero,nota_emitida_em,observacao&order=pago_em.desc")
           .catch(()=>DB.rest("GET","pagamentos?select=id,cobranca_id,valor,forma_enum,parcelas,"+
             "antecipado,adquirente,bandeira,maquininha_id,conta_id,nsu,taxa,taxa_pct,liquido,"+
-            "pago_em,nota_fiscal,nota_numero,observacao&order=pago_em.desc&limit=600"))
+            "pago_em,nota_fiscal,nota_numero,observacao&order=pago_em.desc"))
       ]);
       S.cobrancas = cob.map(c=>({...c, pac:UID.pacRev[c.paciente_id]||""}));
       S.pagamentos = pag;
@@ -13992,8 +14010,12 @@ function renderFinanceiro(){
   if(cc) cc.addEventListener("click", ()=>baixarCSV("conferencia-por-paciente", linhasConferenciaCSV()));
   const csv = $("#fluxoCsv");
   if(csv) csv.addEventListener("click", ()=>baixarCSV("fluxo-de-caixa",
-    [["Mês","Bruto","Taxas","Líquido","Recebido","Previsto","Parcelas","Atrasadas"]].concat(
-      fluxoPorMes().map(f=>[nomeMes(f.mes),f.bruto,f.taxas,f.liquido,f.recebido,f.previsto,f.parcelas,f.atrasadas]))));
+    [["Mês","Bruto","Taxas","Líquido","Recebido","Previsto","Parcelas","Atrasadas","Saídas","Saldo"]].concat(
+      mesesDoFluxo().map(f=>{ const d = fluxoMesPor(f.mes) || {};
+        return [nomeMes(f.mes),f.bruto,f.taxas,f.liquido,f.recebido,f.previsto,f.parcelas,f.atrasadas,
+                n0(d.saidas), n0(d.saldo)]; }))));
+  const cxm = $("#cxMes");
+  if(cxm) cxm.addEventListener("change", ()=>{ caixaMesSel = cxm.value; renderFinanceiro(); });
 }
 
 /* "No campo parcelas atrasadas, se eu clicar dá para ver o paciente que
@@ -14067,6 +14089,35 @@ function htmlAtrasadas(){
 /* O mês de verdade: entrada E saída. vw_fluxo_mes soma recebimento,
    despesa lançada e compra de material pela nota fiscal do estoque. */
 const fluxoMesPor = m => (S.fluxoMes||[]).find(f=>String(f.mes).slice(0,7)===String(m).slice(0,7));
+
+/* v89 — a clínica vai lançar à mão todo o histórico e quer o caixa mês a
+   mês desde o primeiro registro. O quadro "Caixa de..." era preso ao mês
+   corrente; agora escolhe qualquer mês que tenha lançamento. */
+let caixaMesSel = null;
+const mesCaixa = () => caixaMesSel || (hojeISO().slice(0,7)+"-01");
+function mesesComLancamento(){
+  const set = new Set([hojeISO().slice(0,7)+"-01"]);
+  (S.fluxoMes||[]).forEach(f=>set.add(String(f.mes).slice(0,7)+"-01"));
+  fluxoPorMes().forEach(f=>set.add(String(f.mes).slice(0,7)+"-01"));
+  return [...set].sort().reverse();
+}
+/* A tabela mês a mês nascia só das ENTRADAS: um mês antigo com despesa e
+   sem recebimento não aparecia. Agora entra todo mês que tem qualquer
+   lançamento, de um lado ou do outro. */
+function mesesDoFluxo(){
+  const porMes = {};
+  fluxoPorMes().forEach(f=>{ porMes[String(f.mes).slice(0,7)+"-01"] = {...f, mes:String(f.mes).slice(0,7)+"-01"}; });
+  (S.fluxoMes||[]).forEach(f=>{ const k = String(f.mes).slice(0,7)+"-01";
+    if(!porMes[k]) porMes[k] = {mes:k, bruto:0, taxas:0, liquido:0, recebido:0, previsto:0, parcelas:0, atrasadas:0}; });
+  return Object.values(porMes).sort((a,b)=>a.mes<b.mes?-1:1);
+}
+function htmlSeletorMesCaixa(){
+  const sel = mesCaixa();
+  return '<select id="cxMes" class="naoimprime" style="max-width:200px" aria-label="Mês do caixa">'
+    + mesesComLancamento().map(m=>'<option value="'+m+'"'+(m===sel?" selected":"")+'>'
+        + nomeMes(m)+(m===hojeISO().slice(0,7)+"-01"?" (atual)":"")+'</option>').join("")
+    + '</select>';
+}
 const n0 = v => Number(v||0);
 
 function htmlSaldoDoMes(){
@@ -14081,11 +14132,12 @@ function htmlSaldoDoMes(){
     + 'gasta 38 aparece como um consultório que fatura 40 mil.</div>';
   if(!fm.length) return "";
   const hojeMes = hojeISO().slice(0,7)+"-01";
-  const m = fluxoMesPor(hojeMes) || {};
+  const mesSel = mesCaixa();
+  const m = fluxoMesPor(mesSel) || {};
   const futuros = fm.filter(f=>String(f.mes)>=hojeMes);
   const saldoPrev = cent(futuros.reduce((a,f)=>a+n0(f.saldo),0));
-  return '<div class="sec-h" style="margin-top:14px"><h2>Caixa de '+nomeMes(hojeMes)+'</h2>'
-    + '<span class="hint">entrou, saiu, sobrou</span></div>'
+  return '<div class="sec-h" style="margin-top:14px"><h2>Caixa de '+nomeMes(mesSel)+'</h2>'
+    + htmlSeletorMesCaixa()+'</div>'
     + '<div class="tiles q4">'
     + '<div class="tile ok"><b>'+fmtBRL(n0(m.entradas_recebidas))+'</b><span>entrou</span></div>'
     + '<div class="tile crit"><b>'+fmtBRL(n0(m.saidas_pagas))+'</b><span>saiu</span></div>'
@@ -14095,7 +14147,7 @@ function htmlSaldoDoMes(){
     + '<b>'+fmtBRL(n0(m.saldo))+'</b><span>saldo do mês com o previsto</span></div>'
     + '</div>'
     + '<div class="stage" style="margin-top:8px">'
-    + 'Custo fixo de '+nomeMes(hojeMes)+': <b>'+fmtBRL(n0(m.saidas_fixas))+'</b> · '
+    + 'Custo fixo de '+nomeMes(mesSel)+': <b>'+fmtBRL(n0(m.saidas_fixas))+'</b> · '
     + 'variável: <b>'+fmtBRL(n0(m.saidas_variaveis))+'</b>. '
     + 'O fixo é o que a clínica paga com a porta fechada — é ele que define quanto '
     + 'precisa faturar para empatar. '
@@ -14104,14 +14156,14 @@ function htmlSaldoDoMes(){
 }
 
 function htmlFluxo(){
-  const meses = fluxoPorMes();
+  const meses = mesesDoFluxo();
   if(!meses.length) return htmlSaldoDoMes()
     + `<div class="empty" style="margin-top:10px">Nenhum recebimento lançado ainda.
     O fluxo aparece aqui quando o primeiro pagamento for registrado na ficha de um paciente.</div>`;
   const hojeMes = hojeISO().slice(0,7)+"-01";
   const futuros = meses.filter(m=>m.mes>=hojeMes);
   const aReceber = cent(futuros.reduce((a,m)=>a+m.previsto,0));
-  const esteMes = meses.find(m=>m.mes===hojeMes) || {recebido:0, previsto:0, taxas:0};
+  const esteMes = meses.find(m=>m.mes===mesCaixa()) || {recebido:0, previsto:0, taxas:0};
   const atrasadas = meses.reduce((a,m)=>a+m.atrasadas,0);
   const totalTaxas = cent(meses.reduce((a,m)=>a+m.taxas,0));
   const topo = Math.max(...meses.map(m=>m.liquido), 1);
@@ -14123,7 +14175,7 @@ function htmlFluxo(){
         S.falhouFluxo.map(f=>f.motivo).join(" · ")}</p></div>` : ""}
     ${htmlSaldoDoMes()}
     <div class="sec-h" style="margin-top:14px"><h2>Entradas</h2>
-      <span class="hint">recebimento de paciente</span></div>
+      <span class="hint">recebimento de paciente · ${nomeMes(mesCaixa())}</span></div>
     <div class="tiles q4">
       <div class="tile ok"><b>${fmtBRL(esteMes.recebido)}</b><span>total recebido no mês</span></div>
       <div class="tile"><b>${fmtBRL(esteMes.previsto)}</b><span>aguardando pagamento</span></div>
@@ -14140,7 +14192,10 @@ function htmlFluxo(){
       entra em <b>A receber</b> e só migra para Total recebido quando a adquirente paga —
       à vista em 30 dias, parcelado de 30 em 30. Um crédito de R$ 1.000,00 em 3× lançado
       hoje não aparece em Total recebido deste mês: aparece em A receber, dividido nos
-      três meses seguintes.</div>
+      três meses seguintes.
+      <br><b>Lançamento de meses anteriores:</b> a parcela de cartão cuja data de crédito
+      já passou entra como <b>recebida nessa data</b>, sem conciliação — o histórico
+      não vira "atrasado", e o extrato da adquirente ainda pode ser conferido.</div>
     <div class="stage" style="margin-top:8px">Taxa de maquininha no período:
       <b>${fmtBRL(totalTaxas)}</b>. É dinheiro que foi faturado e não entra —
       vale conferir contra o extrato da adquirente e corrigir a tabela de taxas.</div>
@@ -14153,9 +14208,9 @@ function htmlFluxo(){
     <div class="card rolar"><table class="tab-rel">
       <thead><tr><th>Mês</th><th class="n">Bruto</th><th class="n">Taxas</th>
         <th class="n">Líquido</th><th class="n">Recebido</th><th class="n">Aguardando</th>
-        ${(S.fluxoMes && pode("despesas"))?`<th class="n">Saídas</th><th class="n">Saldo</th>`:""}
+        ${(S.fluxoMes && pode("despesas"))?`<th class="n">Saídas</th><th class="n">Saldo</th><th class="n">Acumulado</th>`:""}
         <th style="width:90px">&nbsp;</th><th class="n">Parc.</th></tr></thead>
-      <tbody>${meses.map(m=>{
+      <tbody>${(()=>{ let acum = 0; return meses.map(m=>{
         const rec = Math.round(100*m.recebido/Math.max(m.liquido,0.01));
         return `<tr${m.mes===hojeMes?' style="background:var(--accent-soft,transparent)"':""}>
           <td><b>${nomeMes(m.mes)}</b>${m.atrasadas?` <span class="pill crit">${m.atrasadas} atrasada(s)</span>`:""}</td>
@@ -14165,15 +14220,16 @@ function htmlFluxo(){
           <td class="n">${m.recebido?fmtBRL(m.recebido):'<span class="vaga">—</span>'}</td>
           <td class="n">${m.previsto?fmtBRL(m.previsto):'<span class="vaga">—</span>'}</td>
           ${(S.fluxoMes && pode("despesas"))?(()=>{ const f=fluxoMesPor(m.mes)||{};
-            const sai=n0(f.saidas), sal=n0(f.saldo);
+            const sai=n0(f.saidas), sal=n0(f.saldo); acum = cent(acum + sal);
             return `<td class="n" style="color:var(--crit)">${
                 sai?"−"+fmtBRL(sai).replace("R$ ",""):'<span class="vaga">—</span>'}</td>
               <td class="n"><b style="color:${sal<0?"var(--crit)":"var(--ok)"}">${
-                fmtBRL(sal)}</b></td>`; })():""}
+                fmtBRL(sal)}</b></td>
+              <td class="n" style="color:${acum<0?"var(--crit)":"inherit"}">${fmtBRL(acum)}</td>`; })():""}
           <td><div class="barfx" title="${rec}% já recebido"
             ><i class="rec" style="width:${rec}%"></i><i class="prev" style="width:${100-rec}%"></i></div></td>
           <td class="n">${m.parcelas}</td></tr>`;
-      }).join("")}</tbody>
+      }).join(""); })()}</tbody>
       <tfoot><tr><td>Total</td>
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.bruto,0))}</td>
         <td class="n">${fmtBRL(totalTaxas)}</td>
@@ -14181,7 +14237,7 @@ function htmlFluxo(){
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.recebido,0))}</td>
         <td class="n">${fmtBRL(meses.reduce((a,m)=>a+m.previsto,0))}</td>
         ${(S.fluxoMes && pode("despesas"))?`<td class="n">${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saidas),0))}</td>
-        <td class="n"><b>${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saldo),0))}</b></td>`:""}
+        <td class="n"><b>${fmtBRL((S.fluxoMes||[]).reduce((a,f)=>a+n0(f.saldo),0))}</b></td><td></td>`:""}
         <td></td><td class="n">${meses.reduce((a,m)=>a+m.parcelas,0)}</td></tr></tfoot>
     </table></div>
     ${htmlConferenciaPaciente()}
@@ -17422,7 +17478,7 @@ window.MD = {
   conferirVersao, get versaoServidor(){ return versaoServidor; },
   enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
   htmlFilaExclusao, exclusoesPendentes, pedirExclusao, ligarFilaExclusao,
-  fmtRg, fmtCel, fmtFone, erroDoPaciente, htmlRelExclusoes, atualizarAvisoExclusao, exclusoesParaMim,
+  fmtRg, fmtCel, fmtFone, erroDoPaciente, mesesDoFluxo, mesesComLancamento, htmlRelExclusoes, atualizarAvisoExclusao, exclusoesParaMim,
   htmlDespTabela, htmlDespLancamentos,
   montarTip, ligarTipGraficos, mostrarTip, esconderTip,
   get grafDados(){ return grafDados; },
