@@ -1202,6 +1202,10 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
   html[data-toque="sim"] .stepper button{width:34px;height:36px}
   html[data-toque="sim"] .minibtn{padding:8px 12px}
 }
+.tab{position:relative}
+.tab .badge-n{position:absolute;top:4px;right:6px;min-width:18px;height:18px;padding:0 5px;
+  border-radius:9px;background:var(--warn);color:#fff;font-size:11px;font-weight:700;
+  line-height:18px;text-align:center;pointer-events:none}
 </style>
 
 <!-- ============ LOGIN ============ -->
@@ -1316,6 +1320,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
     <section class="screen on" id="scr-hoje">
       <div class="sec-h" data-col="full"><h2 id="saudacao">Atendimento</h2><span class="hint mono" id="todayChip">—</span></div>
       <div data-col="full" id="avisoSql" hidden></div>
+      <div data-col="full" id="excAvisoBox"></div>
 
       <div class="voice" data-col="a">
         <div class="head">
@@ -1524,6 +1529,7 @@ html[data-toque="sim"] .item:hover{border-color:var(--line)}
         <button role="tab" aria-selected="false" data-fin="recebidos">Recebimentos</button>
         <button role="tab" aria-selected="false" data-fin="notas">Notas fiscais</button>
         <button role="tab" aria-selected="false" data-fin="despesas">Despesas</button>
+        <button role="tab" aria-selected="false" data-fin="exclusoes">Exclusões</button>
         <button role="tab" aria-selected="false" data-fin="producao">Produção</button>
         <button role="tab" aria-selected="false" data-fin="precos">Preços</button>
         <button role="tab" aria-selected="false" data-fin="taxas">Taxas da maquininha</button>
@@ -1903,7 +1909,7 @@ function enderecoPac(p){
 const UFS_PAC = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
-const VERSAO = "v87 · 25/11/2026";
+const VERSAO = "v88 · 27/11/2026";
 
 const BACKEND = {
   url: "https://oqncwkwduiniiubklhwk.supabase.co",
@@ -1989,7 +1995,7 @@ const DB = {
   COLUNAS_OPCIONAIS: new Set(["maquininha_id","nota_fiscal","nota_numero",
                               "nota_emitida_em","atualizado_em",
                               "bandeira","nsu","adquirente","observacao",
-                              "conta_id","plano_descricao","pedido_id"]),
+                              "conta_id","plano_descricao","pedido_id","rg"]),
   async inserirTolerante(tabela, corpo, prefer){
     return await DB.escreverTolerante("POST", tabela, corpo, prefer);
   },
@@ -2159,7 +2165,7 @@ const DB = {
         .catch(()=>DB.rest("GET","procedimento_kit?select=procedimento_id,material_id,quantidade")),
       DB.rest("GET","estoque?select=material_id,saldo"),
       DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,observacao,"+
-        "cep,logradouro,numero,complemento,bairro,cidade,uf,origem,origem_detalhe,"+
+        "cep,logradouro,numero,complemento,bairro,cidade,uf,origem,origem_detalhe,rg,"+
         "pacientes_clinico(observacao)&order=nome")
         .catch(()=>DB.rest("GET","pacientes?select=id,nome,nascimento,sexo,cpf,telefone,email,"+
           "pacientes_clinico(observacao)&order=nome")),
@@ -2177,7 +2183,7 @@ const DB = {
       UID.pac[curto]=p.id; UID.pacRev[p.id]=curto;
       const cl = Array.isArray(p.pacientes_clinico) ? p.pacientes_clinico[0] : p.pacientes_clinico;
       return {id:curto, nome:p.nome, nasc:p.nascimento||"", sexo:SEXO_DB2APP[p.sexo]||"",
-        cpf:p.cpf?fmtCpf(p.cpf):"", tel:p.telefone||"", email:p.email||"",
+        cpf:p.cpf?fmtCpf(p.cpf):"", rg:p.rg?fmtRg(p.rg):"", tel:p.telefone?fmtFone(p.telefone):"", email:p.email||"",
         /* obs = clínica (pacientes_clinico, ato do dentista)
            obsGeral = recado da recepção (pacientes.observacao).
            Duas coisas diferentes, e misturá-las faria a secretária
@@ -2282,8 +2288,12 @@ const DB = {
 
   /* ---------------- escrita ---------------- */
   async gravarPaciente(p){
+    try{ return await DB._gravarPacienteBruto(p); }
+    catch(e){ throw erroDoPaciente(e); }
+  },
+  async _gravarPacienteBruto(p){
     const corpo = {nome:p.nome, nascimento:p.nasc||null, sexo:SEXO_APP2DB[p.sexo]||null,
-      cpf:(p.cpf||"").replace(/\D/g,"")||null, telefone:p.tel||null, email:p.email||null,
+      cpf:(p.cpf||"").replace(/\D/g,"")||null, rg:(p.rg||"").toUpperCase().replace(/[^0-9X]/g,"")||null, telefone:p.tel||null, email:p.email||null,
       observacao: (p.obsGeral||"").trim() || null,
       cep:(p.cep||"").replace(/\D/g,"")||null, logradouro:(p.log||"").trim()||null,
       numero:(p.num||"").trim()||null, complemento:(p.comp||"").trim()||null,
@@ -7345,8 +7355,24 @@ $("#saveAtend").addEventListener("click", async ()=>{
       "\n\nRegistrar assim mesmo? O vencimento fica gravado no prontuário.")) return;
 
   let pac=S.pacientes.find(p=>norm(p.nome)===norm(ficha.paciente.trim()));
-  if(!pac){ pac={id:"p"+Date.now(), nome:ficha.paciente.trim(), nasc:"", sexo:"", cpf:"", tel:"", email:"",
-    obs:"Cadastrado no atendimento — completar contato"}; S.pacientes.push(pac); }
+  /* v88 — paciente só nasce com CPF e celular. Antes o atendimento criava
+     a ficha só com o nome ("completar contato"), e o completar nunca vinha:
+     16 de 22 fichas estavam sem CPF. Agora o atendimento para e manda
+     cadastrar; a ficha do atendimento continua preenchida aqui. */
+  if(!pac){
+    const nomeNovo = ficha.paciente.trim();
+    if(pode("cadastro") && confirm('"'+nomeNovo+'" não está no cadastro.\n\n'
+        + 'Para registrar o atendimento, cadastre o paciente primeiro — CPF e celular '
+        + 'são obrigatórios. O que você já preencheu nesta ficha fica guardado.\n\nCadastrar agora?')){
+      document.querySelector(".tab[data-scr='pacientes']").click();
+      setTimeout(()=>{ editarPaciente(null);
+        setTimeout(()=>{ const n=$("#edNome"); if(n){ n.value = nomeNovo; n.focus(); } }, 80);
+      }, 120);
+    }else if(!pode("cadastro")){
+      toast("Paciente não cadastrado — peça à recepção para cadastrar com CPF e celular.");
+    }
+    return;
+  }
 
   if(ficha.editId){
     const a=S.atendimentos.find(x=>x.id===ficha.editId);
@@ -7619,7 +7645,8 @@ function abrirPaciente(id){
         <dl class="dados">
           <div><dt>Nascimento</dt><dd>${p.nasc?fmtData(p.nasc):vazio}</dd></div>
           <div><dt>Sexo</dt><dd>${p.sexo||vazio}</dd></div>
-          <div><dt>CPF</dt><dd>${p.cpf?`<span class="mono">${p.cpf}</span>`:vazio}</dd></div>
+          <div><dt>CPF</dt><dd>${p.cpf?`<span class="mono">${p.cpf}</span>`:`<span class="pill warn">falta — obrigatório</span>`}</dd></div>
+          <div><dt>RG</dt><dd>${p.rg?`<span class="mono">${p.rg}</span>`:vazio}</dd></div>
           <div><dt>Telefone</dt><dd>${p.tel?`<a href="tel:${p.tel.replace(/\D/g,"")}" class="lnk mono">${p.tel}</a>`:vazio}</dd></div>
           <div><dt>E-mail</dt><dd>${p.email?`<a href="mailto:${p.email}" class="lnk">${p.email}</a>`:vazio}</dd></div>
           <div><dt>Endereço</dt><dd>${enderecoPac(p)||vazio}</dd></div>
@@ -7741,8 +7768,12 @@ function editarPaciente(id){
         <div class="field"><label for="edSexo">Sexo</label><select id="edSexo"><option value="">—</option>
           ${["Feminino","Masculino","Outro","Prefiro não informar"].map(o=>`<option ${p.sexo===o?"selected":""}>${o}</option>`).join("")}</select></div>
       </div>
-      <div class="field"><label for="edCpf">CPF</label><input id="edCpf" inputmode="numeric" class="mono" placeholder="000.000.000-00" maxlength="14" value="${esc(p.cpf)}"></div>
-      <div class="field"><label for="edTel">Celular / WhatsApp</label><input id="edTel" type="tel" inputmode="numeric" class="mono" placeholder="11 - 99999-9999" maxlength="17" value="${esc(p.tel)}"></div>
+      <div class="grid2">
+        <div class="field"><label for="edCpf">CPF <span style="color:var(--crit)">*</span></label><input id="edCpf" inputmode="numeric" class="mono" placeholder="000.000.000-00" maxlength="14" value="${esc(p.cpf)}"></div>
+        <div class="field"><label for="edRg">RG</label><input id="edRg" class="mono" placeholder="00.000.000-0" maxlength="16" autocomplete="off" value="${esc(p.rg)}"></div>
+      </div>
+      <div class="field"><label for="edTel">Celular / WhatsApp <span style="color:var(--crit)">*</span></label><input id="edTel" type="tel" inputmode="numeric" class="mono" placeholder="11-99999-9999" maxlength="13" value="${esc(p.tel)}"></div>
+      <small style="color:var(--ink-3);margin-top:-4px"><span style="color:var(--crit)">*</span> CPF e celular são obrigatórios para finalizar o cadastro.</small>
       <div class="field"><label for="edEmail">E-mail</label><input id="edEmail" type="email" placeholder="nome@email.com" value="${esc(p.email)}"></div>
       <div class="eyebrow" style="margin-top:4px">Endereço</div>
       <div class="grid2">
@@ -7796,6 +7827,7 @@ function editarPaciente(id){
   if(novo) setTimeout(()=>{ const n=$("#edNome"); if(n) n.focus(); }, 60);
   mascarar("#edCpf", fmtCpf);
   mascarar("#edTel", fmtCel);
+  mascarar("#edRg", fmtRg);
   mascarar("#edCep", fmtCep);
   $("#edCancelar").addEventListener("click", ()=>{
     if(novo){ pacAberto=null; renderPacientes(); } else abrirPaciente(id);
@@ -7808,7 +7840,11 @@ function editarPaciente(id){
     const nasc=$("#edNasc").value;
     if(nasc && nasc>ISO(hoje)){ toast("Data de nascimento no futuro."); return; }
     const cpf=$("#edCpf").value.trim();
-    if(cpf && !cpfValido(cpf)){ toast("CPF inválido — confira os números."); $("#edCpf").focus(); return; }
+    if(!cpf){ toast("Informe o CPF — é obrigatório para finalizar o cadastro."); $("#edCpf").focus(); return; }
+    if(!cpfValido(cpf)){ toast("CPF inválido — confira os números."); $("#edCpf").focus(); return; }
+    if(!celularValido($("#edTel").value)){ toast("Informe o celular com DDD (11-99999-9999) — é obrigatório para finalizar o cadastro."); $("#edTel").focus(); return; }
+    const rgLimpo = $("#edRg").value.toUpperCase().replace(/[^0-9X]/g,"");
+    if(rgLimpo && rgLimpo.length < 5){ toast("RG incompleto — confira os números."); $("#edRg").focus(); return; }
     if(cpf){ const dono=S.pacientes.find(x=>x.id!==p.id && x.cpf && x.cpf.replace(/\D/g,"")===cpf.replace(/\D/g,""));
       if(dono){ toast("Este CPF já está no cadastro de "+dono.nome+"."); return; } }
     // nome repetido não bloqueia (há homônimo de verdade), mas avisa
@@ -7818,7 +7854,7 @@ function editarPaciente(id){
       S.pacientes.push(p);
     }
     p.nome=nome; p.nasc=nasc; p.sexo=$("#edSexo").value; p.cpf=fmtCpf(cpf);
-    p.tel=fmtCel($("#edTel").value); p.email=email;
+    p.tel=fmtCel($("#edTel").value); p.email=email; p.rg=fmtRg($("#edRg").value);
     p.obsGeral=$("#edObsGeral").value.trim();
     p.cep=$("#edCep").value.trim(); p.log=$("#edLog").value.trim();
     p.num=$("#edNum").value.trim(); p.comp=$("#edComp").value.trim();
@@ -9295,8 +9331,8 @@ function formParceiroHtml(f){
         ${campo("paPrazo","Prazo de entrega (dias)", e.prazo_dias, "opcional", "number")}
       </div>
       <div class="grid2">
-        ${campo("paTel","Telefone", fmtFone(e.telefone||""), "11 - 3333-4444")}
-        ${campo("paZap","WhatsApp", fmtCel(e.whatsapp||""), "11 - 99999-9999")}
+        ${campo("paTel","Telefone", fmtFone(e.telefone||""), "11-3333-4444")}
+        ${campo("paZap","WhatsApp", fmtCel(e.whatsapp||""), "11-99999-9999")}
       </div>
       <div class="grid2">
         ${campo("paEmail","E-mail", e.email, "contato@empresa.com.br", "email")}
@@ -11177,7 +11213,7 @@ function htmlEquipe(){
         <div class="grid2">
           <div class="field"><label for="nvTel">Celular</label>
             <input id="nvTel" inputmode="numeric" class="mono" maxlength="17"
-              placeholder="11 - 99999-9999" autocomplete="off"></div>
+              placeholder="11-99999-9999" autocomplete="off"></div>
           <div class="field"><label for="nvEsp">Especialidade</label><input id="nvEsp" autocomplete="off"></div>
         </div>
         <div class="row">
@@ -11215,7 +11251,7 @@ function htmlEquipe(){
         <div class="grid2">
           <div class="field"><label for="eqTel">Celular</label>
             <input id="eqTel" inputmode="numeric" class="mono" maxlength="17"
-              placeholder="11 - 99999-9999"
+              placeholder="11-99999-9999"
               value="${fmtCel(u.telefone||"").replace(/"/g,"&quot;")}" autocomplete="off"></div>
           <div class="field"><label for="eqEsp">Especialidade</label>
             <input id="eqEsp" value="${(u.especialidade||"").replace(/"/g,"&quot;")}" autocomplete="off"></div>
@@ -11968,8 +12004,12 @@ function htmlDespesas(){
      pedir e aprovar sozinho, o controle seria enfeite.
    · Quem decide é administrador ou dentista-proprietário.
    · O banco é que garante tudo isso, não esta tela: as regras estão dentro de
-     decidir_exclusao(), que é SECURITY DEFINER, e a política de DELETE direto
-     foi retirada da tabela. Esconder botão não é controle de acesso.
+     decidir_exclusao(), que é SECURITY DEFINER, e uma política RESTRITIVA
+     de DELETE (using false) tranca a porta direta em despesas, cobranças e
+     pagamentos. Esconder botão não é controle de acesso.
+   · v88: vale também para COBRANÇA. A justificativa é obrigatória (o banco
+     recusa sem ela), e o pedido guarda uma cópia completa do registro
+     (snapshot) — o que foi apagado continua legível no relatório.
    · Aprovar APAGA e ENCERRA o pedido na mesma transação. Ou as duas coisas
      valem, ou nenhuma vale — foi o ponto que o Luiz fez questão de reforçar:
      nada pode continuar pendente depois de aprovado. */
@@ -11979,22 +12019,23 @@ const exclusoesPendentes = () =>
 
 function minhaSolicitacao(x){ return x.solicitado_por === DB.meuId; }
 
-function htmlFilaExclusao(){
+function htmlFilaExclusao(semHistorico){
+  setTimeout(()=>{ try{ atualizarAvisoExclusao(); }catch(_){} }, 0);
   if(S.exclusoes === null) return "";
   const pend = exclusoesPendentes();
-  const decididas = (S.exclusoes||[]).filter(x=>x.estado!=="pendente").slice(0,5);
+  const decididas = semHistorico ? [] : (S.exclusoes||[]).filter(x=>x.estado!=="pendente").slice(0,5);
   const souDecisor = pode("admin");
   if(!pend.length && !decididas.length) return "";
 
   const linha = x=>{
     const meu = minhaSolicitacao(x);
     return '<div class="item"><div class="main">'
-      + '<b>'+esc(x.resumo)+'</b>'
+      + '<b><span class="pill neutral" style="margin-right:4px">'+ROTULO_TIPO_EXC(x)+'</span>'+esc(x.resumo)+'</b>'
       + '<small>'+fmtBRL(x.valor)
       + (x.n_linhas>1 ? ' · '+x.n_linhas+' lançamentos' : "")
       + ' · pedido por '+esc(x.solicitante||"—")
       + ' em '+fmtData(String(x.solicitado_em).slice(0,10))+'</small>'
-      + (x.motivo ? '<small style="color:var(--ink-3)">motivo: '+esc(x.motivo)+'</small>' : "")
+      + (x.motivo ? '<small style="display:block;color:var(--ink-3)">justificativa: '+esc(x.motivo)+'</small>' : "")
       + '</div><div class="end">'
       + (souDecisor && !meu
           ? '<button class="minibtn" data-excok="'+x.id+'" '
@@ -12021,39 +12062,147 @@ function htmlFilaExclusao(){
       + 'style="cursor:pointer;font-size:12.5px;color:var(--ink-3)">'
       + 'Últimas exclusões decididas</summary><div class="list" style="margin-top:8px">'
     + decididas.map(x=>'<div class="item"><div class="main">'
-        + '<b>'+esc(x.resumo)+'</b><small>'+fmtBRL(x.valor)+' · '
+        + '<b>'+ROTULO_TIPO_EXC(x)+' · '+esc(x.resumo)+'</b><small>'+fmtBRL(x.valor)+' · '
         + (x.estado==="aprovada" ? "apagado" : x.estado)
         + ' · pediu '+esc(x.solicitante||"—")
         + (x.decisor ? ' · decidiu '+esc(x.decisor) : "")
         + (x.decidido_em ? ' em '+fmtData(String(x.decidido_em).slice(0,10)) : "")
         + '</small></div><div class="end"><span class="pill '
         + (x.estado==="aprovada"?"crit":"neutral")+'">'+x.estado+'</span></div></div>').join("")
-    + '</div></details>' : "");
+    + '</div><button class="minibtn" data-irexc="1" style="margin-top:6px">'
+    + 'Ver o relatório completo de exclusões</button></details>' : "");
 }
 
-async function pedirExclusao(escopo, id, oQue){
-  const motivo = prompt("Por que este lançamento deve ser excluído?\n\n"
-    + oQue + "\n\nO pedido vai para aprovação de um administrador ou do "
-    + "dentista-proprietário. Você não pode aprovar o seu próprio pedido.");
-  if(motivo === null) return;          // desistiu no prompt
+const ROTULO_TIPO_EXC = x => x.tabela === "cobrancas" ? "Cobrança" : "Despesa";
+
+/* ---------- v88: relatório de exclusões ----------
+   "deixar justificativa e anotado no banco e no relatório". Todo pedido
+   aparece aqui — apagado, recusado ou retirado —, com quem pediu, por quê,
+   quem decidiu e quando. O pedido não se apaga nunca. */
+function htmlRelExclusoes(){
+  if(S.exclusoes === null)
+    return '<div class="empty">Não consegui ler o registro de exclusões no banco.</div>';
+  const todas = S.exclusoes || [];
+  const SIT = {aprovada:["crit","apagado"], recusada:["ok","recusado — mantido"],
+               cancelada:["neutral","pedido retirado"], pendente:["warn","aguardando"]};
+  const dt = v => v ? fmtData(String(v).slice(0,10)) : "—";
+  return htmlFilaExclusao(true)
+    + '<div class="sec-h"><h2>Relatório de exclusões</h2>'
+    + '<span class="hint">todo pedido fica registrado, aprovado ou não</span></div>'
+    + '<div class="row naoimprime" style="margin-bottom:8px">'
+    + '<button class="btn" id="excImprimir">Imprimir / salvar em PDF</button></div>'
+    + (todas.length
+      ? '<div class="rolar"><table class="tab-rel"><thead><tr>'
+        + '<th>Pedido em</th><th>Tipo</th><th>Lançamento</th><th class="n">Valor</th>'
+        + '<th>Justificativa</th><th>Pediu</th><th>Situação</th><th>Decidiu</th>'
+        + '<th>Decidido em</th><th>Observação</th></tr></thead><tbody>'
+        + todas.map(x=>{
+            const sit = SIT[x.estado] || ["neutral", x.estado];
+            return '<tr><td>'+dt(x.solicitado_em)+'</td>'
+              + '<td>'+ROTULO_TIPO_EXC(x)+'</td>'
+              + '<td>'+esc(x.resumo)+(x.n_linhas>1?' <small>('+x.n_linhas+' lançamentos)</small>':'')+'</td>'
+              + '<td class="n">'+fmtBRL(x.valor)+'</td>'
+              + '<td>'+esc(x.motivo||"—")+'</td>'
+              + '<td>'+esc(x.solicitante||"—")+'</td>'
+              + '<td><span class="pill '+sit[0]+'">'+sit[1]+'</span></td>'
+              + '<td>'+esc(x.decisor||"—")+'</td>'
+              + '<td>'+dt(x.decidido_em)+'</td>'
+              + '<td>'+esc(x.observacao||"—")+'</td></tr>';
+          }).join("")
+        + '</tbody></table></div>'
+      : '<div class="empty">Nenhum pedido de exclusão até agora.</div>');
+}
+function ligarRelExclusoes(){
+  ligarFilaExclusao();
+  const b = $("#excImprimir"); if(b) b.addEventListener("click", ()=>window.print());
+}
+
+/* ---------- v88: quem decide fica sabendo sem abrir Despesas ----------
+   Número no item Financeiro do menu e cartão na tela inicial, só para quem
+   aprova, contando só pedidos de outras pessoas (o próprio não se aprova).
+   A fila é conferida a cada 3 minutos e ao voltar para o app. */
+function exclusoesParaMim(){
+  if(!pode("admin")) return [];
+  return exclusoesPendentes().filter(x=>!minhaSolicitacao(x));
+}
+function atualizarAvisoExclusao(){
+  const meus = exclusoesParaMim();
+  const n = meus.length;
+  $$('.tab[data-scr="financeiro"]').forEach(t=>{
+    let b = t.querySelector(".badge-n");
+    if(!n){ if(b) b.remove(); return; }
+    if(!b){ b = document.createElement("span"); b.className = "badge-n"; t.appendChild(b); }
+    b.textContent = n;
+    b.title = n + (n>1 ? " exclusões aguardando" : " exclusão aguardando") + " a sua aprovação";
+  });
+  const box = $("#excAvisoBox"); if(!box) return;
+  if(!n){ box.innerHTML = ""; return; }
+  box.innerHTML = '<div class="card" style="margin-bottom:10px;border-color:var(--warn)">'
+    + '<div class="sec-h" style="margin:0 0 6px"><h2 style="font-size:14px">'
+    + (n>1 ? n+' exclusões aguardando você' : '1 exclusão aguardando você')+'</h2>'
+    + '<span class="pill warn">'+n+'</span></div>'
+    + '<div style="font-size:13px;color:var(--ink-2)">'
+    + meus.slice(0,3).map(x=>ROTULO_TIPO_EXC(x)+' · '+esc(x.resumo)+' — '+fmtBRL(x.valor)
+        + ' · pediu '+esc(x.solicitante||"—")).join('<br>')
+    + (n>3 ? '<br>e mais '+(n-3)+'…' : '') + '</div>'
+    + '<div class="row" style="margin-top:8px"><button class="btn" id="excAvisoIr">Ver e decidir</button></div></div>';
+  $("#excAvisoIr").addEventListener("click", irParaExclusoes);
+}
+function irParaExclusoes(){
+  finAba = "exclusoes";
+  const t = document.querySelector(".tab[data-scr='financeiro']");
+  if(t) t.click();          // a aba do menu só troca a tela; quem desenha é renderFinanceiro
+  renderFinanceiro();
+}
+async function conferirExclusoes(){
+  if(MODO !== "nuvem" || !usuario || !pode("admin") || document.hidden) return;
+  try{
+    S.exclusoes = await DB.rest("GET","vw_exclusoes?select=id,tabela,escopo,registro_id,resumo,valor,"+
+      "n_linhas,motivo,estado,solicitado_em,decidido_em,observacao,linhas_apagadas,"+
+      "solicitado_por,solicitante,decisor&order=solicitado_em.desc&limit=200");
+    atualizarAvisoExclusao();
+  }catch(e){ /* sem rede: o aviso fica como estava */ }
+}
+setInterval(conferirExclusoes, 3*60*1000);
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) conferirExclusoes(); });
+
+async function pedirExclusao(escopo, id, oQue, tabela){
+  const ehCob = tabela === "cobrancas";
+  let motivo = "", aviso = "";
+  for(;;){
+    motivo = prompt(aviso + "Justifique a exclusão — obrigatório. Fica registrado no banco "
+      + "e no relatório de exclusões.\n\n" + oQue + "\n\nO pedido vai para aprovação de um "
+      + "administrador ou do dentista-proprietário. Você não pode aprovar o seu próprio pedido.",
+      motivo);
+    if(motivo === null) return;          // desistiu
+    motivo = motivo.trim();
+    if(motivo.length >= 5) break;
+    aviso = "⚠ A justificativa é obrigatória (mínimo de 5 letras).\n\n";
+  }
   const ok = await naNuvem(async ()=>{
-    await DB.rest("POST","rpc/solicitar_exclusao_despesa",
-      {p_id:id, p_escopo:escopo, p_motivo:motivo||null});
+    if(ehCob) await DB.rest("POST","rpc/solicitar_exclusao_cobranca", {p_id:id, p_motivo:motivo});
+    else      await DB.rest("POST","rpc/solicitar_exclusao_despesa",
+                {p_id:id, p_escopo:escopo, p_motivo:motivo});
     await DB.carregarCaixa();
   }, "pedido de exclusão");
   if(!ok) return;
-  despForm = null; renderFinanceiro();
-  toast("Pedido enviado. Um administrador precisa aprovar para apagar.");
+  if(!ehCob) despForm = null;
+  renderFinanceiro();
+  toast("Pedido enviado com a justificativa. Um administrador precisa aprovar para apagar.");
 }
 
 function ligarFilaExclusao(){
   $$("#finPainel [data-excok]").forEach(b=>b.addEventListener("click", async ()=>{
     const x = (S.exclusoes||[]).find(e=>e.id===b.dataset.excok); if(!x) return;
-    if(!confirm("Aprovar a exclusão de \""+x.resumo+"\" ("+fmtBRL(x.valor)+")?\n\n"
+    const obs = prompt("Aprovar a exclusão de \""+x.resumo+"\" ("+fmtBRL(x.valor)+")?\n\n"
       + (x.n_linhas>1 ? x.n_linhas+" lançamentos serão apagados.\n\n" : "")
-      + "Pedido por "+(x.solicitante||"—")+".\nNão dá para desfazer.")) return;
+      + (x.tabela==="cobrancas" ? "Os pagamentos registrados nesta cobrança saem junto.\n\n" : "")
+      + "Justificativa de "+(x.solicitante||"—")+": "+(x.motivo||"—")
+      + "\n\nNão dá para desfazer. Observação da aprovação (opcional):", "");
+    if(obs === null) return;
     const ok = await naNuvem(async ()=>{
-      await DB.rest("POST","rpc/decidir_exclusao", {p_solicitacao:x.id, p_aprovar:true});
+      await DB.rest("POST","rpc/decidir_exclusao",
+        {p_solicitacao:x.id, p_aprovar:true, p_observacao:obs.trim()||null});
       await DB.carregarCaixa();
     }, "aprovação da exclusão");
     if(!ok) return;
@@ -12080,6 +12229,10 @@ function ligarFilaExclusao(){
     }, "retirada do pedido");
     if(!ok) return;
     renderFinanceiro(); toast("Pedido retirado.");
+  }));
+
+  $$("#finPainel [data-irexc]").forEach(b=>b.addEventListener("click", ()=>{
+    finAba = "exclusoes"; renderFinanceiro(); window.scrollTo({top:0, behavior:"instant"});
   }));
 }
 
@@ -12516,7 +12669,7 @@ function ligarDespesas(){
   const dex = $("#dsExcluir");
   if(dex) dex.addEventListener("click", ()=>{
     const d = despForm; if(!d || !d.id) return;
-    pedirExclusao("linha", d.id, esc(d.descricao)+" — "+fmtBRL(d.valor));
+    pedirExclusao("linha", d.id, "Despesa: "+d.descricao+" — "+fmtBRL(d.valor), "despesas");
   });
 
   const dexs = $("#dsExcluirSerie");
@@ -12708,7 +12861,9 @@ function htmlCobrancas(){
     falta:   a.falta + c.falta}), {cobrado:0, pago:0, falta:0});
   const vencidas = todas.filter(c=>c.vencida);
 
-  return '<div class="sec-h"><h2>Cobranças</h2>'
+  const pedidaExc = new Set(exclusoesPendentes().filter(x=>x.tabela==="cobrancas").map(x=>x.registro_id));
+  return (pode("despesas") ? htmlFilaExclusao() : "")
+    + '<div class="sec-h"><h2>Cobranças</h2>'
     + '<span class="hint">' + (pode("lancaCobranca")
         ? "lançadas na ficha do paciente" : "do seu atendimento") + '</span></div>'
 
@@ -12757,7 +12912,12 @@ function htmlCobrancas(){
             + '<td class="n"><b>'+(c.falta>0.005?fmtBRL(c.falta):'—')+'</b></td>'
             + '<td><span class="pill '+sit[0]+'">'+sit[1]+'</span></td>'
             + '<td class="naoimprime"><button class="minibtn" data-cbficha="'+esc(c.pac)
-            + '">abrir ficha</button></td></tr>';
+            + '">abrir ficha</button>'
+            + (!pode("despesas") ? ""
+               : pedidaExc.has(c.id) ? ' <span class="pill warn">exclusão pedida</span>'
+               : ' <button class="minibtn" data-cbexcluir="'+esc(c.id)+'" style="color:var(--crit)">'
+                 + 'pedir exclusão</button>')
+            + '</td></tr>';
         }).join("")
       + '</tbody><tfoot><tr><td colspan="3">Total</td>'
       + '<td class="n">'+fmtBRL(cent(soma.cobrado))+'</td>'
@@ -12770,6 +12930,13 @@ function htmlCobrancas(){
 }
 
 function ligarCobrancas(){
+  ligarFilaExclusao();
+  $$("#finPainel [data-cbexcluir]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = linhasCobranca().find(x=>x.id===b.dataset.cbexcluir); if(!c) return;
+    pedirExclusao("linha", c.id, "Cobrança de "+c.pacNome+": "+(c.descricao||"cobrança")+" — "
+      + fmtBRL(c.valor) + (c.pago>0 ? " (já tem "+fmtBRL(c.pago)+" recebido, que sai junto)" : ""),
+      "cobrancas");
+  }));
   const f=$("#cbFiltro");
   if(f) f.addEventListener("change", ()=>{ cobFiltro=f.value; renderFinanceiro(); });
   $$("#finPainel [data-cbficha]").forEach(b=>b.addEventListener("click", ()=>{
@@ -13752,6 +13919,7 @@ function renderFinanceiro(){
      no cadastro de conta bancária. */
   if(finAba==="cobrancas" && !pode("caixa")) finAba="producao";
   if(finAba==="despesas" && !pode("despesas")) finAba="producao";
+  if(finAba==="exclusoes" && !pode("despesas")) finAba="producao";
   if(finAba==="notas" && !pode("lancaPagamento")) finAba="producao";
   if(finAba==="painel" && !podeVer) finAba="producao";
   if(finAba==="contas" && !pode("contas")) finAba="producao";
@@ -13765,6 +13933,9 @@ function renderFinanceiro(){
   }
   else if(finAba==="cobrancas"){
     alvo.innerHTML = htmlCobrancas(); ligarCobrancas();
+  }
+  else if(finAba==="exclusoes"){
+    alvo.innerHTML = htmlRelExclusoes(); ligarRelExclusoes();
   }
   else if(finAba==="despesas"){
     alvo.innerHTML = htmlDespesas(); ligarDespesas();
@@ -13790,6 +13961,7 @@ function renderFinanceiro(){
   $$("#finAbas button").forEach(b=>{
     b.hidden = (b.dataset.fin==="cobrancas" && !pode("caixa"))
             || (b.dataset.fin==="despesas" && !pode("despesas"))
+            || (b.dataset.fin==="exclusoes" && !pode("despesas"))
             || (b.dataset.fin==="notas" && !pode("lancaPagamento"))
             || (b.dataset.fin==="painel" && !podeVer)
             || (b.dataset.fin==="contas" && !pode("contas"))
@@ -17187,6 +17359,7 @@ function semearCaixaDemo(){
 
 function renderAll(){
   if(!usuario) return;
+  setTimeout(()=>{ try{ atualizarAvisoExclusao(); }catch(_){} }, 0);
   semearCodigosDemo(); semearMovimentosDemo(); semearCustosDemo();
   semearCaixaDemo(); semearPrecosDemo();
   // um aviso só, no topo, quando falta atualização: repetir em cada
@@ -17249,6 +17422,7 @@ window.MD = {
   conferirVersao, get versaoServidor(){ return versaoServidor; },
   enderecoPac, ORIGENS, ROTULO_ORIGEM_PAC, pode,
   htmlFilaExclusao, exclusoesPendentes, pedirExclusao, ligarFilaExclusao,
+  fmtRg, fmtCel, fmtFone, erroDoPaciente, htmlRelExclusoes, atualizarAvisoExclusao, exclusoesParaMim,
   htmlDespTabela, htmlDespLancamentos,
   montarTip, ligarTipGraficos, mostrarTip, esconderTip,
   get grafDados(){ return grafDados; },
@@ -17405,8 +17579,8 @@ function celularValido(v){ return /^[1-9][1-9]9[0-9]{8}$/.test(soDigitos(v)); }
 function fmtCel(v){
   const d = soDigitos(v).slice(0,11);
   if(d.length <= 2) return d;
-  if(d.length <= 7) return d.slice(0,2)+" - "+d.slice(2);
-  return d.slice(0,2)+" - "+d.slice(2,7)+"-"+d.slice(7);
+  if(d.length <= 7) return d.slice(0,2)+"-"+d.slice(2);
+  return d.slice(0,2)+"-"+d.slice(2,7)+"-"+d.slice(7);
 }
 /* Telefone que pode ser FIXO ou celular — o do laboratório, o da
    unidade. Mesmo desenho do celular (XX - ...), mudando só o
@@ -17416,9 +17590,9 @@ function fmtCel(v){
 function fmtFone(v){
   const d = soDigitos(v).slice(0,11);
   if(d.length <= 2) return d;
-  if(d.length <= 6) return d.slice(0,2)+" - "+d.slice(2);
-  if(d.length <= 10) return d.slice(0,2)+" - "+d.slice(2,6)+"-"+d.slice(6);
-  return d.slice(0,2)+" - "+d.slice(2,7)+"-"+d.slice(7);
+  if(d.length <= 6) return d.slice(0,2)+"-"+d.slice(2);
+  if(d.length <= 10) return d.slice(0,2)+"-"+d.slice(2,6)+"-"+d.slice(6);
+  return d.slice(0,2)+"-"+d.slice(2,7)+"-"+d.slice(7);
 }
 /* CNPJ e CEP com máscara progressiva, pelo mesmo motivo: campo que só
    formata quando está completo deixa o cadastro cheio de número cru. */
@@ -17433,6 +17607,31 @@ function fmtCnpjMask(v){
 function fmtCep(v){
   const d = soDigitos(v).slice(0,8);
   return d.length <= 5 ? d : d.slice(0,5)+"-"+d.slice(5);
+}
+/* v88 — RG no desenho de SP, xx.xxx.xxx-x. O dígito final pode ser X.
+   RG de outro estado com outro tamanho (mais de 9) fica sem máscara, em vez
+   de ser cortado: perder um número é pior que perder o ponto. */
+function fmtRg(v){
+  const d = String(v||"").toUpperCase().replace(/[^0-9X]/g,"").replace(/X(?=.)/g,"").slice(0,14);
+  if(d.length > 9)  return d;
+  if(d.length <= 2) return d;
+  if(d.length <= 5) return d.slice(0,2)+"."+d.slice(2);
+  if(d.length <= 8) return d.slice(0,2)+"."+d.slice(2,5)+"."+d.slice(5);
+  return d.slice(0,2)+"."+d.slice(2,5)+"."+d.slice(5,8)+"-"+d.slice(8);
+}
+/* v88 — o banco recusa CPF repetido, CPF ausente e celular ausente. A
+   mensagem crua do Postgres ("violates check constraint...") não diz nada
+   para a recepção; aqui ela vira instrução. */
+function erroDoPaciente(e){
+  const m = String((e && e.message) || "");
+  const t = [
+    [/cpf_unico_por_clinica/, "este CPF já pertence a outro paciente desta clínica — procure pelo CPF na busca de pacientes"],
+    [/paciente_cpf_obrigatorio/, "o CPF é obrigatório para salvar a ficha"],
+    [/paciente_celular_obrigatorio/, "o celular com DDD (11-99999-9999) é obrigatório para salvar a ficha"],
+    [/cpf_digito_verificador/, "CPF inválido — confira os números"],
+    [/paciente_rg_formato/, "RG inválido — use só números (e X no final, se houver)"]];
+  for(const [re, txt] of t) if(re.test(m)){ const n = new Error(txt); n.status = e.status; return n; }
+  return e;
 }
 
 /* liga a máscara ao campo: formata enquanto digita e mantém o cursor no
